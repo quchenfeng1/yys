@@ -339,6 +339,7 @@ class ScriptWorker(QThread):
         """持续调度循环：Scheduler 驱动，不断检查并执行到期任务。"""
         import importlib, inspect
         from tasks.base.task_context import TaskContext
+        from tasks.base.task_step import TaskStep
 
         idle_sleep = 5  # 无任务时休眠秒数
         _consecutive_errors = 0  # 连续错误计数器
@@ -388,6 +389,7 @@ class ScriptWorker(QThread):
                             executor=self.executor,
                             recognizer=self.recognizer,
                             connection=None,
+                            log=self.log,
                         )
                         step = task_cls()
                         result = step.execute(ctx)

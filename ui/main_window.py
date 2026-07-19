@@ -73,6 +73,9 @@ class MainWindow(QMainWindow):
         self._scheduler = Scheduler(self.config, state_manager)
         self._scheduler.load_tasks_from_config()
         self._scheduler.load_state()
+        # 直接注入调度器到队列面板，确保 UI 能实时显示
+        self.task_queue.set_scheduler(self._scheduler)
+        self.task_queue.refresh()
         self._scheduler.build_schedule()  # 发布 SCHEDULE_UPDATED → 任务队列面板
 
         self.append_log.connect(self._on_append_log)
@@ -215,41 +218,62 @@ class MainWindow(QMainWindow):
         form = QFormLayout(self._cfg_form)
         form.setContentsMargins(12, 10, 12, 10); form.setSpacing(8)
 
+        # ── 基本 ──
         self._cfg_enabled = QCheckBox(); form.addRow("启用任务:", self._cfg_enabled)
         self._cfg_priority = QSpinBox(); self._cfg_priority.setRange(1, 99); form.addRow("优先级:", self._cfg_priority)
+
+        # ── 重复规则 ──
         self._cfg_repeat_type = QComboBox()
-        self._cfg_repeat_type.addItems(["daily(每日)", "interval_hours(隔N小时)", "interval_days(隔N天)",
-                                         "weekly(每周)", "monthly(每月)", "once(单次)", "expire_at(失效时间)"])
+        self._cfg_repeat_type.addItems([
+            "daily(每日)", "weekly(每周)", "monthly_start(每月初)",
+            "interval_days(隔N天)", "interval_hours(隔N小时)",
+            "once(单次)", "expire_at(失效时间)", "special(活动限定)",
+        ])
         self._cfg_repeat_type.currentIndexChanged.connect(self._on_repeat_type_changed)
         form.addRow("重复规则:", self._cfg_repeat_type)
-        self._cfg_at_time = QLineEdit(); self._cfg_at_time.setPlaceholderText("HH:MM"); form.addRow("执行时间:", self._cfg_at_time)
-        self._cfg_times = QSpinBox(); self._cfg_times.setRange(1, 999); form.addRow("执行次数:", self._cfg_times)
+
+        # 每日/每周：时间范围
+        self._cfg_time_start = QLineEdit(); self._cfg_time_start.setPlaceholderText("如 08:00")
+        form.addRow("开始时间:", self._cfg_time_start)  # daily
+        self._cfg_time_end = QLineEdit(); self._cfg_time_end.setPlaceholderText("如 22:00")
+        form.addRow("结束时间:", self._cfg_time_end)    # daily
+
+        # 每周：星期多选
+        self._cfg_weekdays = QWidget()
+        wd_ly = QHBoxLayout(self._cfg_weekdays); wd_ly.setContentsMargins(0,0,0,0); wd_ly.setSpacing(2)
+        self._cfg_wd_checks = {}
+        for i, name in enumerate(["一","二","三","四","五","六","日"]):
+            cb = QCheckBox(name); self._cfg_wd_checks[i+1] = cb; wd_ly.addWidget(cb)
+        wd_ly.addStretch()
+        form.addRow("每周:", self._cfg_weekdays)
+
+        # 间隔天数
         self._cfg_days = QSpinBox(); self._cfg_days.setRange(1, 365); form.addRow("间隔天数:", self._cfg_days)
+        # 间隔小时
         self._cfg_hours = QDoubleSpinBox(); self._cfg_hours.setRange(0.5, 168); self._cfg_hours.setSingleStep(0.5)
         form.addRow("间隔小时:", self._cfg_hours)
-        self._cfg_win_start = QLineEdit(); self._cfg_win_start.setPlaceholderText("如 08:00")
-        form.addRow("窗口开始:", self._cfg_win_start)
-        self._cfg_win_end = QLineEdit(); self._cfg_win_end.setPlaceholderText("如 22:00")
-        form.addRow("窗口结束:", self._cfg_win_end)
+        # 单次
+        self._cfg_once_at = QLineEdit(); self._cfg_once_at.setPlaceholderText("2026-08-01 10:00"); form.addRow("执行时间:", self._cfg_once_at)
+
+        # 活动限定：日期范围
+        self._cfg_date_start = QLineEdit(); self._cfg_date_start.setPlaceholderText("YYYY-MM-DD")
+        form.addRow("活动开始:", self._cfg_date_start)
+        self._cfg_date_end = QLineEdit(); self._cfg_date_end.setPlaceholderText("YYYY-MM-DD")
+        form.addRow("活动结束:", self._cfg_date_end)
+
+        # ── 执行规则 ──
+        self._cfg_exec_mode = QComboBox()
+        self._cfg_exec_mode.addItems(["按次数", "按时间(分钟)"])
+        form.addRow("执行方式:", self._cfg_exec_mode)
+        self._cfg_exec_value = QSpinBox(); self._cfg_exec_value.setRange(1, 99999)
+        form.addRow("执行值:", self._cfg_exec_value)
+
         self._cfg_max_daily = QSpinBox(); self._cfg_max_daily.setRange(1, 9999); self._cfg_max_daily.setSpecialValueText("不限")
         form.addRow("每日上限:", self._cfg_max_daily)
 
-        # ── 下次执行时间（计算 + 手动设置）──
-        next_row = QHBoxLayout()
-        self._cfg_next_run = QLineEdit(); self._cfg_next_run.setPlaceholderText("YYYY-MM-DD HH:MM")
-        self._cfg_next_run.setReadOnly(True)
-        self._cfg_next_run.setStyleSheet("background:#F0F0F0;")
-        next_row.addWidget(self._cfg_next_run)
-        calc_btn = QPushButton("📅 计算")
-        calc_btn.setStyleSheet("QPushButton{background:#34A853;color:white;border:none;border-radius:4px;padding:4px 12px;font-size:11px;}QPushButton:hover{background:#2E7D32;}")
-        calc_btn.clicked.connect(self._on_calc_next_run)
-        next_row.addWidget(calc_btn)
-        edit_btn = QPushButton("✎")
-        edit_btn.setStyleSheet("QPushButton{background:transparent;color:#1A73E8;border:1px solid #1A73E8;border-radius:4px;padding:4px 8px;font-size:11px;}QPushButton:hover{background:#E3F0FF;}")
-        edit_btn.clicked.connect(self._on_edit_next_run)
-        next_row.addWidget(edit_btn)
-        next_w = QWidget(); next_w.setLayout(next_row)
-        form.addRow("下次执行:", next_w)
+        # ── 下次执行 ──
+        self._cfg_next_run = QLineEdit(); self._cfg_next_run.setPlaceholderText("保存时自动填入当前时间")
+        form.addRow("下次执行:", self._cfg_next_run)
 
         self._cfg_team = QComboBox(); self._cfg_team.addItem("（无）")
         form.addRow("阵容预设:", self._cfg_team)
@@ -385,23 +409,30 @@ class MainWindow(QMainWindow):
         self._cfg_enabled.setChecked(cfg.get("enabled", False))
         self._cfg_priority.setValue(cfg.get("priority", 10))
         rtype = repeat.get("type", "daily")
-        type_map = {"daily":0,"interval_hours":1,"interval_days":2,"weekly":3,"monthly":4,"once":5,"expire_at":6}
+        type_map = {"daily":0,"weekly":1,"monthly_start":2,"interval_days":3,"interval_hours":4,"once":5,"expire_at":6,"special":7}
         self._cfg_repeat_type.setCurrentIndex(type_map.get(rtype, 0))
-        self._cfg_at_time.setText(repeat.get("at_time", "00:00"))
-        self._cfg_times.setValue(repeat.get("times", 1))
+        self._cfg_time_start.setText(repeat.get("time_start", ""))
+        self._cfg_time_end.setText(repeat.get("time_end", ""))
+        wds = repeat.get("weekdays") or []
+        for d, cb in self._cfg_wd_checks.items():
+            cb.setChecked(d in wds)
         self._cfg_days.setValue(repeat.get("days", 1))
         self._cfg_hours.setValue(repeat.get("hours", 1.0))
-        self._cfg_win_start.setText(repeat.get("window", {}).get("start", ""))
-        self._cfg_win_end.setText(repeat.get("window", {}).get("end", ""))
+        self._cfg_once_at.setText(repeat.get("at", ""))
+        w = repeat.get("window") or {}
+        self._cfg_date_start.setText(w.get("date_start", ""))
+        self._cfg_date_end.setText(w.get("date_end", ""))
         self._cfg_max_daily.setValue(repeat.get("max_daily", 0) or 0)
-
-        # 加载下次执行时间（从 task_state.json）
+        # 执行规则
+        er = cfg.get("execution_rule", {})
+        is_time = er.get("mode") == "time"
+        self._cfg_exec_mode.setCurrentIndex(1 if is_time else 0)
+        self._cfg_exec_value.setValue(er.get("value", 1))
+        # 下次执行
         nr = cfg.get("next_run_time", "")
         if not nr:
             nr = self._load_next_run_from_state(t.name)
         self._cfg_next_run.setText(nr)
-        self._cfg_next_run.setReadOnly(True)
-        self._cfg_next_run.setStyleSheet("background:#F0F0F0;")
 
         self._cfg_team.setVisible(tt == "battle")
         self._on_repeat_type_changed(self._cfg_repeat_type.currentIndex())
@@ -449,50 +480,100 @@ class MainWindow(QMainWindow):
 
     def _on_repeat_type_changed(self, idx):
         """根据选中的重复规则显示/隐藏相关字段。"""
-        types = ["daily","interval_hours","interval_days","weekly","monthly","once","expire_at"]
+        types = ["daily","weekly","monthly_start","interval_days","interval_hours","once","expire_at","special"]
         rtype = types[idx] if idx < len(types) else "daily"
-        needs_time = rtype in ("daily","weekly","monthly","interval_days")
-        needs_days = rtype == "interval_days"
-        needs_hours = rtype == "interval_hours"
-        self._cfg_at_time.setVisible(needs_time)
-        self._cfg_days.setVisible(needs_days)
-        self._cfg_hours.setVisible(needs_hours)
-        # 找到对应的 form label: 索引 3=at_time, 5=days, 6=hours
-        for i in range(self._cfg_form.layout().count()):
-            item = self._cfg_form.layout().itemAt(i)
-            if item and item.widget():
-                w = item.widget()
-                if w is self._cfg_at_time or w is self._cfg_days or w is self._cfg_hours:
-                    if i > 0:
-                        label_item = self._cfg_form.layout().itemAt(i - 1)
-                        if label_item and label_item.widget():
-                            label_item.widget().setVisible(w.isVisible())
+        # 隐藏所有条件字段
+        for w, lbl in [
+            (self._cfg_time_start, "开始时间:"), (self._cfg_time_end, "结束时间:"),
+            (self._cfg_weekdays, "每周:"), (self._cfg_days, "间隔天数:"),
+            (self._cfg_hours, "间隔小时:"), (self._cfg_once_at, "执行时间:"),
+            (self._cfg_date_start, "活动开始:"), (self._cfg_date_end, "活动结束:"),
+        ]:
+            w.setVisible(False)
+            self._hide_form_row(w)
+        # 按类型显示
+        if rtype == "daily":
+            self._cfg_time_start.setVisible(True)
+            self._cfg_time_end.setVisible(True)
+        elif rtype == "weekly":
+            self._cfg_weekdays.setVisible(True)
+            self._cfg_time_start.setVisible(True)
+            self._cfg_time_end.setVisible(True)
+        elif rtype == "interval_days":
+            self._cfg_days.setVisible(True)
+        elif rtype == "interval_hours":
+            self._cfg_hours.setVisible(True)
+        elif rtype == "once":
+            self._cfg_once_at.setVisible(True)
+        elif rtype == "special":
+            self._cfg_date_start.setVisible(True)
+            self._cfg_date_end.setVisible(True)
+        # 显示对应 label
+        for w, _ in [(self._cfg_time_start, ""), (self._cfg_time_end, ""),
+                      (self._cfg_weekdays, ""), (self._cfg_days, ""),
+                      (self._cfg_hours, ""), (self._cfg_once_at, ""),
+                      (self._cfg_date_start, ""), (self._cfg_date_end, "")]:
+            if w.isVisible():
+                self._show_form_row(w)
+
+    def _hide_form_row(self, widget):
+        """隐藏 form 中指定 widget 及其 label。"""
+        layout = self._cfg_form.layout()
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item and item.widget() is widget and i > 0:
+                label_item = layout.itemAt(i - 1)
+                if label_item and label_item.widget():
+                    label_item.widget().setVisible(False)
+
+    def _show_form_row(self, widget):
+        """显示 form 中指定 widget 及其 label。"""
+        layout = self._cfg_form.layout()
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item and item.widget() is widget and i > 0:
+                label_item = layout.itemAt(i - 1)
+                if label_item and label_item.widget():
+                    label_item.widget().setVisible(True)
 
     def _on_save_task_config(self):
         """保存当前任务配置到 tasks.yaml。"""
         t = getattr(self, '_current_game_task', None)
         if not t: return
 
-        types = ["daily","interval_hours","interval_days","weekly","monthly","once","expire_at"]
+        types = ["daily","weekly","monthly_start","interval_days","interval_hours","once","expire_at","special"]
         rtype = types[self._cfg_repeat_type.currentIndex()]
-        repeat = {"type": rtype, "times": self._cfg_times.value()}
-        if rtype in ("daily","weekly","monthly","interval_days"):
-            repeat["at_time"] = self._cfg_at_time.text() or "00:00"
+        repeat = {"type": rtype}
+        if rtype in ("daily", "weekly"):
+            repeat["time_start"] = self._cfg_time_start.text().strip() or "00:00"
+            repeat["time_end"] = self._cfg_time_end.text().strip() or "23:59"
+        if rtype == "weekly":
+            wds = [d for d, cb in self._cfg_wd_checks.items() if cb.isChecked()]
+            repeat["weekdays"] = wds
         if rtype == "interval_days":
             repeat["days"] = self._cfg_days.value()
         if rtype == "interval_hours":
             repeat["hours"] = self._cfg_hours.value()
-        ws = self._cfg_win_start.text().strip()
-        we = self._cfg_win_end.text().strip()
-        if ws and we:
-            repeat["window"] = {"start": ws, "end": we}
-        elif ws:
-            repeat["window"] = {"start": ws, "end": "23:59"}
-        elif we:
-            repeat["window"] = {"start": "00:00", "end": we}
+        if rtype == "once":
+            at = self._cfg_once_at.text().strip()
+            if at: repeat["at"] = at
+        if rtype == "special":
+            ds = self._cfg_date_start.text().strip()
+            de = self._cfg_date_end.text().strip()
+            if ds or de:
+                repeat["window"] = {}
+                if ds: repeat["window"]["date_start"] = ds
+                if de: repeat["window"]["date_end"] = de
+
         md = self._cfg_max_daily.value()
         if md > 0:
             repeat["max_daily"] = md
+
+        # 执行规则
+        exec_rule = {
+            "mode": "time" if self._cfg_exec_mode.currentIndex() == 1 else "count",
+            "value": self._cfg_exec_value.value(),
+        }
 
         # 更新 tasks.yaml
         tasks_cfg = self.config.get_tasks_config()
@@ -505,6 +586,7 @@ class MainWindow(QMainWindow):
                 item["enabled"] = self._cfg_enabled.isChecked()
                 item["priority"] = self._cfg_priority.value()
                 item["repeat"] = repeat
+                item["execution_rule"] = exec_rule
                 found = True
                 break
         if not found:
@@ -513,6 +595,7 @@ class MainWindow(QMainWindow):
                 "enabled": self._cfg_enabled.isChecked(),
                 "priority": self._cfg_priority.value(),
                 "repeat": repeat,
+                "execution_rule": exec_rule,
             })
 
         import yaml
@@ -520,19 +603,22 @@ class MainWindow(QMainWindow):
         tasks_path.write_text(yaml.dump(tasks_cfg, allow_unicode=True, default_flow_style=False), encoding="utf-8")
         self.config.load()  # 重新加载
 
-        # 同时持久化 next_run_time 到 task_state.json
+        # 持久化 next_run_time 到 task_state.json（未填则自动填入当前时间）
         nr_text = self._cfg_next_run.text().strip()
-        if nr_text:
-            try:
-                from datetime import datetime
-                from core.task_state import TaskStateStore
+        try:
+            from datetime import datetime
+            from core.task_state import TaskStateStore
+            if nr_text:
                 nr_dt = datetime.strptime(nr_text, "%Y-%m-%d %H:%M")
-                store = TaskStateStore()
-                store.load()
-                store.set_next_run(t.name, nr_dt)
-                store.save()
-            except ValueError:
-                pass  # 格式不正确时跳过
+            else:
+                nr_dt = datetime.now().replace(second=0, microsecond=0)
+                self._cfg_next_run.setText(nr_dt.strftime("%Y-%m-%d %H:%M"))
+            store = TaskStateStore()
+            store.load()
+            store.set_next_run(t.name, nr_dt)
+            store.save()
+        except ValueError:
+            pass
 
         QMessageBox.information(self, "保存成功", f"「{t.display_name}」配置已保存")
 

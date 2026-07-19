@@ -22,6 +22,7 @@ class TaskContext:
     connection: Any = None                     # ConnectionManager
     team_manager: Any = None                   # TeamManager
     scheduler: Any = None                      # Scheduler（供 report_expire 等调用）
+    log: Any = None                            # 日志回调: log(msg) 将消息发送到 UI 终端
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.state.get(key, default)

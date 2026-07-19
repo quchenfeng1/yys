@@ -90,13 +90,12 @@ class Scheduler:
                 repeat_raw = t_cfg.get("repeat", {})
                 repeat = RepeatRule(
                     type=repeat_raw.get("type", "daily"),
-                    at_time=repeat_raw.get("at_time"),
+                    time_start=repeat_raw.get("time_start") or repeat_raw.get("at_time"),
+                    time_end=repeat_raw.get("time_end"),
                     weekdays=repeat_raw.get("weekdays"),
-                    month_days=repeat_raw.get("month_days"),
                     days=repeat_raw.get("days"),
                     hours=repeat_raw.get("hours"),
                     at=repeat_raw.get("at"),
-                    times=repeat_raw.get("times", 1),
                     window=repeat_raw.get("window"),
                     max_daily=repeat_raw.get("max_daily"),
                     max_total=repeat_raw.get("max_total"),
@@ -189,13 +188,33 @@ class Scheduler:
         if now < next_run:
             return False
 
-        # 检查时间窗口
+        # 检查时间/日期范围约束
         repeat = task["repeat"]
-        if repeat.window:
-            start = repeat.window.get("start", "") or "00:00"
-            end = repeat.window.get("end", "") or "23:59"
-            t = now.strftime("%H:%M")
-            if not (start <= t <= end):
+        # daily/weekly: 每日时间范围
+        if repeat.type in ("daily", "weekly"):
+            ts = getattr(repeat, 'time_start', '') or '00:00'
+            te = getattr(repeat, 'time_end', '') or '23:59'
+            ts = ts.zfill(5) if len(ts) < 5 else ts
+            te = te.zfill(5) if len(te) < 5 else te
+            now_time = now.strftime("%H:%M")
+            if not (ts <= now_time <= te):
+                return False
+        # special: 仅日期范围（活动限定）
+        if repeat.type == "special" and repeat.window:
+            w = repeat.window
+            today = now.strftime("%Y-%m-%d")
+            ds = w.get("date_start", "")
+            de = w.get("date_end", "")
+            if ds and today < ds: return False
+            if de and today > de: return False
+        # legacy: window 中仍有 time_start/time_end
+        if repeat.window and repeat.type not in ("special",):
+            w = repeat.window
+            ts = (w.get("time_start", "") or "00:00")
+            te = (w.get("time_end", "") or "23:59")
+            ts = ts.zfill(5) if len(ts) < 5 else ts
+            te = te.zfill(5) if len(te) < 5 else te
+            if not (ts <= now.strftime("%H:%M") <= te):
                 return False
         return True
 

@@ -336,10 +336,13 @@ class TaskQueuePanel(QWidget):
 
     def _rebuild_current(self, task_name: str, status: str, progress: str):
         """重建当前任务卡片。"""
-        # 移除旧卡片
-        old = self._current_card
-        if old:
-            old.setParent(None)
+        layout = self.layout()
+        # 安全移除旧卡片
+        if self._current_card:
+            layout.removeWidget(self._current_card)
+            self._current_card.hide()
+            self._current_card.deleteLater()
+            self._current_card = None
 
         if task_name and status == "running":
             display = task_name
@@ -348,7 +351,6 @@ class TaskQueuePanel(QWidget):
                     if t["name"] == task_name:
                         display = t.get("display_name", task_name)
                         break
-
             card = TaskCard(
                 task_name=task_name,
                 display_name=display,
@@ -357,8 +359,7 @@ class TaskQueuePanel(QWidget):
                 progress=progress,
                 compact=False,
             )
-            card.clicked.connect(lambda n: None)  # 点击可查看详情（预留）
-            self.layout().replaceWidget(old, card) if old else self.layout().addWidget(card)
+            layout.insertWidget(1, card)  # index 1 = 紧接 _current_section_label
             self._current_card = card
         else:
             placeholder = QLabel("空闲 — 等待调度")
@@ -373,10 +374,7 @@ class TaskQueuePanel(QWidget):
                     color: {QueueTheme.TEXT_MUTED};
                 }}
             """)
-            idx = self.layout().indexOf(old) if old else 1
-            self.layout().insertWidget(idx, placeholder)
-            if old:
-                old.deleteLater()
+            layout.insertWidget(1, placeholder)
             self._current_card = placeholder
 
     def _rebuild_queue(self):
@@ -390,7 +388,9 @@ class TaskQueuePanel(QWidget):
         count = len(self._queue)
         self._queue_section_label.setText(f"📋 任务队列 ({count})")
 
-        for i, task in enumerate(self._queue[:20]):  # 最多显示20个
+        for i, task in enumerate(self._queue[:20]):
+            if task.get("name") == self._current_task:
+                continue  # 已在当前任务区显示，队列中跳过
             next_time_str = ""
             nr = task.get("next_run")
             if nr:
@@ -427,5 +427,10 @@ class TaskQueuePanel(QWidget):
         pass
 
     def refresh(self):
-        """手动刷新（外部调用）。"""
-        self._on_schedule_updated()
+        """手动刷新（外部调用）—— 直接从 Scheduler 获取数据。"""
+        if self._scheduler:
+            all_tasks = self._scheduler.get_all_tasks()
+            pending = [t for t in all_tasks if t.get("enabled") and t.get("status") == "due"]
+            pending.sort(key=lambda x: x.get("priority", 10))
+            self._queue = pending
+            self._rebuild_queue()

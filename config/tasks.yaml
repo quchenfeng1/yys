@@ -21,10 +21,22 @@ default_order:
 event: []
 permanent: []
 special:
-- enabled: true
+- enabled: false
+  execution_rule:
+    mode: count
+    value: 1
   name: home_scan
   priority: 8
   repeat:
-    max_daily: 1
-    times: 1
     type: once
+- enabled: false
+  execution_rule:
+    mode: time
+    value: 59
+  name: test_list
+  priority: 10
+  repeat:
+    max_daily: 3
+    time_end: '23:59'
+    time_start: 00:00
+    type: daily
