@@ -1,0 +1,16 @@
+# 依赖目录 / 缓存
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 运行时文件
+config/runtime/task_state.json
+logs/
+screenshots/
+
+# IDE
+.vscode/
+.idea/
+*.swp

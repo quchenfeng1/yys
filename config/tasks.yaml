@@ -1,0 +1,25 @@
+# ===== 任务编排配置 =====
+# 所有任务都必须配置 repeat（执行规则），决定 next_run_time 推进
+# repeat 类型: once / daily / weekly / monthly / interval_days / interval_hours / expire_at
+
+default_order: ["daily", "permanent", "special", "event"]
+
+# 日常任务（纯领奖无战斗）
+daily:
+  - name: "sign_in"
+    enabled: false
+    priority: 1
+    repeat: {type: "daily", at_time: "00:00", times: 1}
+  - name: "daily_rewards"
+    enabled: false
+    priority: 1
+    repeat: {type: "daily", at_time: "00:00", times: 1}
+
+# 常驻任务（有战斗逻辑的常驻副本）
+permanent: []
+
+# 特殊任务（固定流程特殊方式）
+special: []
+
+# 活动任务（限时，带有效期）
+event: []

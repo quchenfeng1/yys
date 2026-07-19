@@ -1,0 +1,32 @@
+adb:
+  device_id: 127.0.0.1:16384
+  path: C:/Program Files/Netease/MuMu/nx_main/adb.exe
+  port: 16384
+anti_detect:
+  click_offset_radius: 12
+  delay_jitter: 0.6
+  long_pause_prob: 0.05
+  max_daily_actions: 2000
+  max_daily_runtime: 8
+  min_interval: 0.8
+app:
+  activity: com.netease.onmyoji.Launcher
+  package: com.netease.onmyoji.wyzymnqsd_cps
+emulator:
+  auto_launch: true
+  path: ''
+  type: mumu
+recognize:
+  grayscale: true
+  method: template
+  threshold: 0.8
+run:
+  log_level: INFO
+  mode: background
+  screenshot_on_error: true
+schedule:
+  reset_at: 00:00
+screen:
+  dpi: 240
+  height: 720
+  width: 1280
