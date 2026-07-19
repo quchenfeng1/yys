@@ -1,15 +1,39 @@
 @echo off
 cd /d "%~dp0"
-set PYTHONW=C:\Users\q\.workbuddy\binaries\python\envs\default\Scripts\pythonw.exe
-set PYTHON=C:\Users\q\.workbuddy\binaries\python\envs\default\Scripts\python.exe
+
+REM YYS Auto Script Launcher v2.1
+REM Tries multiple Python installations in priority order
+
+REM Try 1: workbuddy venv pythonw (has all dependencies)
+set "PYTHONW=C:\Users\q\.workbuddy\binaries\python\envs\default\Scripts\pythonw.exe"
 if exist "%PYTHONW%" (
     start "" "%PYTHONW%" main.py
     exit
-) else if exist "%PYTHON%" (
+)
+
+REM Try 2: workbuddy venv python
+set "PYTHON=C:\Users\q\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+if exist "%PYTHON%" (
     "%PYTHON%" main.py
     pause
-) else (
-    echo [Error] Python not found.
-    echo Please run: C:\Users\q\.workbuddy\binaries\python\versions\3.13.12\python.exe -m venv C:\Users\q\.workbuddy\binaries\python\envs\default
-    pause
+    exit
 )
+
+REM Try 3: System Python 3.13 pythonw
+set "PYTHONW=C:\Users\q\AppData\Local\Programs\Python\Python313\pythonw.exe"
+if exist "%PYTHONW%" (
+    start "" "%PYTHONW%" main.py
+    exit
+)
+
+REM Try 4: System Python 3.13 python
+set "PYTHON=C:\Users\q\AppData\Local\Programs\Python\Python313\python.exe"
+if exist "%PYTHON%" (
+    "%PYTHON%" main.py
+    pause
+    exit
+)
+
+echo [ERROR] No Python installation found.
+pause
+exit /b 1

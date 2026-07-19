@@ -7,15 +7,17 @@ ADB 客户端模块
 - 点击/滑动/按键
 - 设置模拟器分辨率为 1280x720（核心需求）
 - 启动/关闭 App
+
+v2.1：所有 subprocess 调用通过 subprocess_utils 确保不弹 CMD 黑窗
 """
 
-import subprocess
 import time
 import numpy as np
 import cv2
 
 from core.logger import get_logger
 from core.exceptions import DeviceConnectError
+from tools.subprocess_utils import run_no_window_text, run_no_window_bytes
 
 logger = get_logger("device.adb")
 
@@ -281,21 +283,11 @@ class ADBClient:
         return cmd
 
     def _run_command(self, args: list, use_device: bool = True, timeout: int = 30) -> str:
-        """运行 adb 命令，返回 stdout 字符串"""
+        """运行 adb 命令，返回 stdout 字符串。v2.1：不弹黑窗。"""
         cmd = self._build_command(args, use_device)
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                encoding="utf-8",
-                errors="replace"
-            )
-            if result.returncode != 0 and result.stderr:
-                logger.debug(f"ADB 命令 stderr: {result.stderr.strip()}")
-            return result.stdout
-        except subprocess.TimeoutExpired:
+            return run_no_window_text(cmd, timeout=timeout)
+        except TimeoutError:
             logger.error(f"ADB 命令超时: {' '.join(args)}")
             return ""
         except FileNotFoundError:
@@ -305,16 +297,11 @@ class ADBClient:
             )
 
     def _run_command_bytes(self, args: list, use_device: bool = True, timeout: int = 30) -> bytes:
-        """运行 adb 命令，返回 stdout 字节流（用于截图）"""
+        """运行 adb 命令，返回 stdout 字节流（用于截图）。v2.1：不弹黑窗。"""
         cmd = self._build_command(args, use_device)
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=timeout,
-            )
-            return result.stdout
-        except subprocess.TimeoutExpired:
+            return run_no_window_bytes(cmd, timeout=timeout)
+        except TimeoutError:
             logger.error(f"ADB 命令超时: {' '.join(args)}")
             return b""
 

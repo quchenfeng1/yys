@@ -1,0 +1,36 @@
+Crash Report
+Time: 2026-07-19 14:19:49.171441
+Error: arguments did not match any overloaded call:
+  scaled(self, s: QSize, mode: Qt.AspectRatioMode): argument 1 has unexpected type 'int'
+  scaled(self, w: int, h: int, mode: Qt.AspectRatioMode): too many arguments
+
+Traceback (most recent call last):
+  File "D:\yys\main.py", line 57, in <module>
+    main()
+    ~~~~^^
+  File "D:\yys\main.py", line 48, in main
+    window = MainWindow()
+  File "D:\yys\ui\main_window.py", line 284, in __init__
+    self._init_ui()
+    ~~~~~~~~~~~~~^^
+  File "D:\yys\ui\main_window.py", line 313, in _init_ui
+    splitter.addWidget(self._build_center())
+                       ~~~~~~~~~~~~~~~~~~^^
+  File "D:\yys\ui\main_window.py", line 343, in _build_center
+    self.image_panel = ImageManagerPanel(self.image_mgr)
+                       ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "D:\yys\ui\panels\image_manager_panel.py", line 353, in __init__
+    self._init_ui()
+    ~~~~~~~~~~~~~^^
+  File "D:\yys\ui\panels\image_manager_panel.py", line 372, in _init_ui
+    self._image_list = ImageListPanel(self._mgr)
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "D:\yys\ui\panels\image_manager_panel.py", line 128, in __init__
+    self._init_ui()
+    ~~~~~~~~~~~~~^^
+  File "D:\yys\ui\panels\image_manager_panel.py", line 179, in _init_ui
+    self._list.setIconSize(self._list.iconSize().scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: arguments did not match any overloaded call:
+  scaled(self, s: QSize, mode: Qt.AspectRatioMode): argument 1 has unexpected type 'int'
+  scaled(self, w: int, h: int, mode: Qt.AspectRatioMode): too many arguments

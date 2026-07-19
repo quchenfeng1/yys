@@ -249,13 +249,15 @@ class EmulatorManager:
             logger.error(f"模拟器启动失败: {e}")
             return False
 
-    def wait_for_adb(self, adb_client, port: int = None, timeout: int = 60) -> bool:
+    def wait_for_adb(self, adb_client, port: int = None, timeout: int = 60,
+                     stop_check=None) -> bool:
         """等待模拟器 ADB 接口就绪
 
         Args:
             adb_client: ADBClient 实例
             port: ADB 端口，None 则使用默认端口
             timeout: 最大等待时间（秒）
+            stop_check: 可选回调 () -> bool，返回 True 时立即中断等待
 
         Returns:
             True 表示 ADB 已就绪
@@ -268,6 +270,11 @@ class EmulatorManager:
 
         start_time = time.time()
         while time.time() - start_time < timeout:
+            # ★ 检查停止标志
+            if stop_check and stop_check():
+                logger.info("收到停止请求，中断 ADB 等待")
+                return False
+
             try:
                 # 尝试连接
                 result = adb_client._run_command(
@@ -295,7 +302,8 @@ class EmulatorManager:
         logger.error(f"等待 ADB 就绪超时 ({timeout}s)")
         return False
 
-    def ensure_running(self, adb_client, port: int = None, timeout: int = 90) -> bool:
+    def ensure_running(self, adb_client, port: int = None, timeout: int = 90,
+                       stop_check=None) -> bool:
         """确保模拟器已运行且 ADB 就绪
 
         如果模拟器未运行则自动启动，然后等待 ADB 就绪。
@@ -305,6 +313,7 @@ class EmulatorManager:
             adb_client: ADBClient 实例
             port: ADB 端口
             timeout: 等待超时时间
+            stop_check: 可选回调 () -> bool，返回 True 时立即中断
 
         Returns:
             True 表示模拟器已就绪
@@ -331,6 +340,9 @@ class EmulatorManager:
             # 等待模拟器进程出现
             logger.info("等待模拟器进程启动...")
             for _ in range(20):
+                if stop_check and stop_check():
+                    logger.info("收到停止请求，中断进程等待")
+                    return False
                 time.sleep(2)
                 if self.is_running():
                     logger.info("模拟器进程已启动")
@@ -340,4 +352,4 @@ class EmulatorManager:
                 return False
 
         # 3. 等待 ADB 就绪
-        return self.wait_for_adb(adb_client, port, timeout)
+        return self.wait_for_adb(adb_client, port, timeout, stop_check=stop_check)

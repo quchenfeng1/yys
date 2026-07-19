@@ -40,12 +40,15 @@ from core.exceptions import ScriptError, DeviceConnectError
 from core.anti_detect import AntiDetect
 from core.recognizer import Recognizer
 from core.executor import Executor
+from core.scheduler import Scheduler
+from core.state_manager import state_manager
+from core.event_bus import event_bus, Events
 from device.adb_client import ADBClient
 from device.emulator import EmulatorManager
 from tasks.login_flow import LoginFlow
 
 # 项目根目录
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent  # d:\yys
 
 # 登录流程所需图片清单（已放弃6张必传图，改为OCR识别进入游戏位置循环点击）
 # 此列表保留用于将来可选的识图增强，不再强制检查
@@ -85,6 +88,7 @@ class ScriptWorker(QThread):
                  adb_port: int = 5555,
                  emulator_path: str = "",
                  auto_launch: bool = True,
+                 scheduler=None,
                  parent=None):
         """
         Args:
@@ -92,12 +96,14 @@ class ScriptWorker(QThread):
             adb_port: ADB 端口
             emulator_path: 自定义模拟器路径
             auto_launch: 是否自动启动模拟器
+            scheduler: 可选，复用已有的 Scheduler 实例
         """
         super().__init__(parent)
         self.emulator_type = emulator_type
         self.adb_port = adb_port
         self.emulator_path = emulator_path
         self.auto_launch = auto_launch
+        self._external_scheduler = scheduler  # 外部注入的调度器
 
         self._stop_flag = False
         self._mutex = QMutex()
@@ -156,6 +162,17 @@ class ScriptWorker(QThread):
         logger = get_logger("worker")
         logger.info("脚本工作线程启动")
 
+        # 初始化调度器并发布日程表（复用已有实例或新建）
+        if self._external_scheduler:
+            self.scheduler = self._external_scheduler
+            self.scheduler.load_tasks_from_config()
+            self.scheduler.load_state()
+        else:
+            self.scheduler = Scheduler(self.config, state_manager)
+            self.scheduler.load_tasks_from_config()
+            self.scheduler.load_state()
+        self.scheduler.build_schedule()  # 发布 SCHEDULE_UPDATED 事件
+
         if self.is_stopped():
             self._stop_and_exit()
             return
@@ -177,7 +194,8 @@ class ScriptWorker(QThread):
         )
 
         if self.auto_launch:
-            ready = emu_manager.ensure_running(self.adb, port=self.adb_port, timeout=90)
+            ready = emu_manager.ensure_running(self.adb, port=self.adb_port, timeout=90,
+                                               stop_check=self.is_stopped)
             if not ready:
                 self.log("模拟器未就绪，请手动启动模拟器后重试", "ERROR")
                 self.status_signal.emit("error")
@@ -307,14 +325,93 @@ class ScriptWorker(QThread):
 
         if success:
             self.log("=" * 40)
-            self.log("登录成功! 已进入庭院主界面")
+            self.log("登录成功! 已进入庭院主界面 — 开始调度循环")
             self.log("=" * 40)
-            self.status_signal.emit("success")
-            self.finished_signal.emit(True, "登录成功，已进入庭院")
+            self._run_schedule_loop()
         else:
             self.log("登录失败，请检查日志和截图", "ERROR")
             self.status_signal.emit("error")
             self.finished_signal.emit(False, "登录失败")
+
+    # ==================== 调度循环（v2.7 持续运行） ====================
+
+    def _run_schedule_loop(self):
+        """持续调度循环：Scheduler 驱动，不断检查并执行到期任务。"""
+        import importlib, inspect
+        from tasks.base.task_context import TaskContext
+
+        idle_sleep = 5  # 无任务时休眠秒数
+        _consecutive_errors = 0  # 连续错误计数器
+
+        while not self.is_stopped():
+            try:
+                # 1. 刷新日程表并发布到 UI
+                schedule = self.scheduler.build_schedule()
+                if schedule:
+                    names = [s["name"] for s in schedule[:5]]
+                    self.log(f"日程表: {' → '.join(names)}")
+
+                # 2. 获取下一个到期任务
+                task_name = self.scheduler.get_next_task()
+                if not task_name:
+                    time.sleep(idle_sleep)
+                    continue
+
+                if self.is_stopped():
+                    break
+
+                # 3. 执行任务
+                self.log(f"▶ 开始执行任务: {task_name}")
+                self.progress_signal.emit(f"执行中: {task_name}")
+                event_bus.publish(Events.TASK_STARTED, task_name=task_name)
+
+                success = False
+                try:
+                    # 查找并导入任务模块
+                    task_cls = None
+                    for cat in ["daily", "permanent", "special", "event"]:
+                        fpath = PROJECT_ROOT / "tasks" / cat / f"{task_name}.py"
+                        if fpath.exists():
+                            mod = importlib.import_module(f"tasks.{cat}.{task_name}")
+                            for _, obj in inspect.getmembers(mod, inspect.isclass):
+                                if (issubclass(obj, TaskStep) and
+                                        obj is not TaskStep and
+                                        getattr(obj, 'is_generic', True) is False):
+                                    task_cls = obj
+                                    break
+                            break
+
+                    if task_cls:
+                        ctx = TaskContext(
+                            task_name=task_name,
+                            task_config=self.config.get_task_config(task_name),
+                            executor=self.executor,
+                            recognizer=self.recognizer,
+                            connection=None,
+                        )
+                        step = task_cls()
+                        result = step.execute(ctx)
+                        success = (result.status == "success")
+                        self.log(f"  结果: {result.status} — {result.message}")
+                    else:
+                        self.log(f"  错误: 未找到任务类 {task_name}", "ERROR")
+
+                except Exception as e:
+                    self.log(f"  任务异常: {e}", "ERROR")
+
+                # 4. 标记完成（失败自动冷却，防止无限重试）
+                self.scheduler.mark_done(task_name, success=success)
+                event_bus.publish(Events.TASK_DONE, task_name=task_name, success=success)
+                self.progress_signal.emit("就绪")
+                _consecutive_errors = 0
+
+            except Exception as e:
+                _consecutive_errors += 1
+                self.log(f"调度循环异常: {e}", "ERROR")
+                if _consecutive_errors > 10:
+                    self.log("连续异常过多，停止调度循环", "ERROR")
+                    break
+                time.sleep(3)  # 短暂休眠后重试
 
     def _load_images(self) -> int:
         """从「所需图片」文件夹加载图片到 assets/ 对应目录

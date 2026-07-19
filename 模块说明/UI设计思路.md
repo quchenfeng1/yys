@@ -1,6 +1,6 @@
 # UI设计思路
 
-> **文档性质**：基于12模块解耦方案的UI分解设计  ｜  **版本**：v2.0（新增监控面板/运行报告入口）
+> **文档性质**：基于12模块解耦方案的UI分解设计  ｜  **版本**：v2.2（新增任务队列展示面板）
 
 ---
 
@@ -9,33 +9,23 @@
 保留v0.5的三栏QSplitter布局，增加底部状态栏：
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  阴阳师自动化脚本                                          [─][□][×] │
-├──────────┬──────────────────────────────────┬───────────────────┤
-│          │  [启动] [停止] [暂停]  当前: 御魂(15/30)│               │
-│  菜单树    │──────────────────────────────────│   日志面板         │
-│          │                                  │                   │
-│ ▸脚本配置 │  日常任务 [▾]                     │  [INFO] 连接成功   │
-│  模拟器   │  ☑ 每日签到  P:1  每天00:00  明日 │  [INFO] 启动调度   │
-│  账号管理 │  ☑ 悬赏封印  P:2  每天06:00  6h后 │  [STEP] 进入御魂   │
-│  任务优先 │                                  │  [STEP] 阵容检查   │
-│  防封号   │  常驻任务 [▾]                     │  [BATTLE] 第15轮   │
-│  运行时段 │  ☑ 御魂副本  P:10 周一三五 14:00  │  [INFO] 战斗胜利   │
-│  阵容预设 │  ☐ 觉醒副本  P:10 每天10:00  明日 │  ...              │
-│  日志配置 │                                  │                   │
-│          │  活动任务 [▾]                     │  [清除日志]        │
-│ ▸任务控制 │  ☐ 夏日活动  有效至08-10          │  [导出日志]        │
-│          │                                  │                   │
-│ ▸运行监控 │  特殊任务 [▾]                     │                   │
-│  运行指标 │  ☐ 真八岐大蛇 P:20 周末          │                   │
-│  异常截图 │                                  │                   │
-│  运行报告 │                                  │                   │
-│ ▸小号设置 │                                  │                   │
-│  小号1    │                                  │                   │
-│  小号2    │                                  │                   │
-├──────────┴──────────────────────────────────┴───────────────────┤
-│ 状态: 运行中 │ 连接: 已连接 │ 账号: 主号 │ 今日操作: 456次       │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  阴阳师自动化脚本                                           [─][□][×] │
+├──────────┬──────────────────────────────────┬────────────────────┤
+│          │  [启动] [停止] [暂停]  当前: 御魂(15/30) │ [📋日志][🖥终端]│
+│  菜单树    │──────────────────────────────────│                    │
+│          │                                  │  📋 日志标签        │
+│ ▸脚本配置 │  日常任务 [▾]                     │  ...               │
+│  ...     │  ...                             │  [清除] [导出]      │
+│          │                                  │ ────────────────── │
+│ ▸任务控制 │                                  │  🖥 终端标签（只读） │
+│          │                                  │  深色背景+自动着色   │
+│ ▸运行监控 │                                  │  stdout/stderr输出  │
+│          │                                  │  [清屏]             │
+│ ▸小号设置 │                                  │                    │
+├──────────┴──────────────────────────────────┴────────────────────┤
+│ 状态: 运行中 │ 连接: 已连接 │ 账号: 主号 │ 今日操作: 456次        │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -94,57 +84,75 @@ class TaskRow(QWidget):
         self.skip_btn = QPushButton("跳过")        # 推进next_run_time
 ```
 
-### 2.3 全局控制栏（中间上方）
+### 2.3 全局控制栏 + 任务队列面板（中间上方）★ v2.2
 
 ```python
 class ControlBar(QWidget):
     """全局控制栏。启动/停止/暂停按钮 + 当前任务显示。"""
 
     def __init__(self):
-        self.start_btn = QPushButton("启动")
-        self.stop_btn = QPushButton("停止")
-        self.pause_btn = QPushButton("暂停")
-        self.current_task_label = QLabel("空闲")
+        self.start_btn = QPushButton("▶ 启动")
+        self.stop_btn = QPushButton("■ 停止")
+        self.pause_btn = QPushButton("⏸ 暂停")
 
     def bind(self, bridge):
-        """通过传参模块绑定按钮→事件总线"""
         bridge.run_bridge.bind_start_button(self.start_btn)
         bridge.run_bridge.bind_stop_button(self.stop_btn)
         bridge.run_bridge.bind_pause_button(self.pause_btn)
-        # 当前任务显示订阅事件
-        bridge.run_bridge.bind_current_task_label(self.current_task_label)
+
+# ★ v2.2 新增：控制栏下方 → 任务队列面板
+class TaskQueuePanel(QWidget):
+    """任务队列展示面板。当前任务（大卡片）+ 队列（小方块）。"""
+    # 详见 ui/panels/task_queue_panel.py
 ```
 
-### 2.4 日志面板（右侧）
+### 2.4 日志+终端组合面板（右侧）★ v2.1 升级
 
 ```python
 class LogPanel(QWidget):
-    """日志面板。实时日志流+级别筛选+清除+导出。"""
+    """右侧组合面板。QTabWidget 双标签：
+    - 📋 日志：结构化日志流（级别筛选 + 模块筛选 + 清除 + 导出）
+    - 🖥 终端：只读内置终端（捕获 stdout/stderr，替代外部黑窗口）
+    """
 
     def __init__(self):
-        self.log_text = QPlainTextEdit()     # 只读日志流
-        self.level_filter = QComboBox()      # INFO/WARNING/ERROR筛选
-        self.module_filter = QComboBox()     # 按模块筛选（v2.0新增）
-        self.clear_btn = QPushButton("清除日志")
-        self.export_btn = QPushButton("导出日志")  # v2.0新增
+        self._tabs = QTabWidget()
+        self._log_stream = LogStreamWidget()   # 日志标签
+        self._terminal = TerminalWidget()       # 终端标签
+        self._tabs.addTab(self._log_stream, "📋 日志")
+        self._tabs.addTab(self._terminal, "🖥 终端")
 
     def start(self):
-        """订阅日志事件，追加到文本框"""
-        event_bus.subscribe("log_record", self._on_log)
+        self._log_stream.start()               # 订阅日志事件
+        self._terminal.install_redirector()    # 安装 stdout 重定向
 
-    def _on_log(self, level, message, timestamp, module="", task="", step="", tags=None):
-        if self._should_show(level, module):
-            prefix = f"[{module}]" if module else ""
-            task_info = f"[{task}/{step}]" if task else ""
-            self.log_text.appendPlainText(
-                f"[{timestamp}] [{level}]{prefix}{task_info} {message}")
+    def shutdown(self):
+        self._terminal.uninstall_redirector()  # 卸载重定向
+```
 
-    def on_export(self):
-        """导出日志包（日志+截图+指标）"""
-        path = QFileDialog.getSaveFileName(self, "导出日志包",
-                                           f"logs_export_{datetime.now():%Y%m%d}.zip")
-        if path:
-            monitor.export_package(start_time=None, end_time=None, output_path=path)
+### 2.4.1 终端控件（只读）
+
+```python
+class TerminalWidget(QWidget):
+    """内置只读终端。深色背景，Consolas 等宽字体，自动着色。"""
+
+    def install_redirector(self):
+        """安装 OutputRedirector → 替换 sys.stdout/stderr"""
+        self._redirector = OutputRedirector()
+        self._redirector.output_received.connect(self._append_terminal)
+        self._redirector.install()
+
+    def _append_terminal(self, text: str):
+        """追加文本，按级别自动着色"""
+        # [INFO]=绿 [WARNING]=橙 [ERROR]=红 [DEBUG]=灰 [STEP]=蓝
+
+class OutputRedirector(QObject):
+    """捕获 sys.stdout/stderr，通过 Qt 信号线程安全发送到终端。"""
+    output_received = pyqtSignal(str)
+    def write(self, text): ...  # 替换 sys.stdout.write
+    def flush(self): ...
+    def install(self):          # sys.stdout = self
+    def uninstall(self):        # 恢复原始 stdout
 ```
 
 ### 2.5 状态展示栏（底部）
