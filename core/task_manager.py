@@ -39,6 +39,13 @@ class TaskModule:
     can_execute: bool = True       # 是否可独立执行（通用模块=False）
     is_generic: bool = False       # 是否为通用模块
     enabled: bool = False          # 是否在 tasks.yaml 中启用
+    # ── 模块声明（决定 UI 配置区）──
+    uses_battle: bool = False      # 是否包含战斗
+    uses_team: bool = False        # 是否需要阵容调整
+    uses_soul: bool = False        # 是否需要御魂配置
+    uses_stamina: bool = False     # 是否需要体力检查
+    loop_count: int = 1            # 默认循环次数
+    timeout: int = 300             # 任务总超时（秒）
 
 
 # ==================== 任务扫描器 ====================
@@ -137,6 +144,14 @@ class TaskManager:
                 # 默认：非通用模块按 category 推断
                 tt = "battle" if category in ("permanent",) else "event_task"
 
+            # ★ 提取模块能力声明（uses_* / loop_count / timeout）
+            uses_battle = self._extract_bool(content, "uses_battle")
+            uses_team = self._extract_bool(content, "uses_team")
+            uses_soul = self._extract_bool(content, "uses_soul")
+            uses_stamina = self._extract_bool(content, "uses_stamina")
+            loop_count = self._extract_int(content, "loop_count", 1)
+            timeout = self._extract_int(content, "timeout", 300)
+
         except Exception:
             pass
 
@@ -149,6 +164,12 @@ class TaskManager:
             filepath=str(filepath),
             can_execute=can_execute,
             is_generic=is_generic,
+            uses_battle=uses_battle,
+            uses_team=uses_team,
+            uses_soul=uses_soul,
+            uses_stamina=uses_stamina,
+            loop_count=loop_count,
+            timeout=timeout,
         )
 
     @staticmethod
@@ -198,6 +219,29 @@ class TaskManager:
                 return m.group(1)
         return ""
 
+    @staticmethod
+    def _extract_bool(content: str, var_name: str) -> bool:
+        """提取模块级 bool 变量（如 uses_battle = True）。"""
+        for pat in [
+            rf'{var_name}\s*=\s*True',
+            rf'{var_name}\s*:\s*bool\s*=\s*True',
+        ]:
+            if re.search(pat, content):
+                return True
+        return False
+
+    @staticmethod
+    def _extract_int(content: str, var_name: str, default: int = 0) -> int:
+        """提取模块级 int 变量（如 loop_count = 10）。"""
+        for pat in [
+            rf'{var_name}\s*=\s*(\d+)',
+            rf'{var_name}\s*:\s*int\s*=\s*(\d+)',
+        ]:
+            m = re.search(pat, content)
+            if m:
+                return int(m.group(1))
+        return default
+
     # ==================== 查询 ====================
 
     def get_all_tasks(self) -> list[TaskModule]:
@@ -246,7 +290,7 @@ class TaskManager:
 
     def new_task(self, category: str, name: str,
                  display_name: str = "", task_type: str = "event_task") -> Optional[Path]:
-        """在指定分类下创建新任务文件（骨架）。"""
+        """在指定分类下创建新任务文件（含 uses_* 能力声明骨架）。"""
         if category not in self.CATEGORY_LABELS:
             return None
 
@@ -258,36 +302,76 @@ class TaskManager:
 
         display = display_name or name
         ttype_label = self.TASK_TYPE_LABELS.get(task_type, "事件任务")
+        is_battle = "True" if task_type == "battle" else "False"
         template = f'''"""
 {display} — {self.CATEGORY_LABELS.get(category, category)}任务
-
-description: {display}
-category: {category}
-task_type: {task_type}
 """
 
+# ==================== ① 模块声明（必填） ====================
 display_name = "{display}"
 description = "{display} — {ttype_label}"
 task_type = "{task_type}"
 
+# 能力声明（按需启用，UI 据此显示配置区）
+uses_battle = {is_battle}
+uses_team = False
+uses_soul = False
+uses_stamina = False
+loop_count = 1
+timeout = 300
+
+# ==================== ② 导入依赖 ====================
 from tasks.base.task_step import TaskStep, StepResult
 from tasks.base.task_context import TaskContext
+from tasks.base.task_graph import TaskGraph
+
+# 通用模块（按需取消注释）
+from tasks.common.close_popup    import ClosePopup
+from tasks.common.return_hall    import ReturnHall
+# from tasks.common.battle_loop   import BattleLoop
+# from tasks.common.select_team   import SelectTeam
+# from tasks.common.check_stamina import CheckStamina
 
 
+# ==================== ③ 特化步骤（可选） ====================
+
+
+# ==================== ④ 构建 TaskGraph ====================
+def build_graph(context: TaskContext) -> TaskGraph:
+    g = TaskGraph("{name}")
+
+    # SETUP 阶段（执行一次）
+    g.add_step("close_popup", ClosePopup())
+
+    # LOOP 阶段（循环 N 次）
+    # g.add_step("battle", BattleLoop(times=context.task_config.get("loop_count", 1)))
+
+    # TEARDOWN 阶段（执行一次）
+    g.add_step("go_home", ReturnHall())
+
+    # 连线
+    g.set_entry("close_popup")
+    g.add_edge("close_popup", "go_home")
+    g.set_error_branch("go_home")
+    return g
+
+
+# ==================== ⑤ 入口类 ====================
 class {name.title().replace("_", "")}Task(TaskStep):
     """{display}。"""
     name = "{name}"
-    display_name = "{display}"
-    description = "{display} — {ttype_label}"
+    display_name = display_name
+    description = description
     is_generic = False
-    timeout = 60
+    timeout = timeout
 
     def execute(self, context: TaskContext) -> StepResult:
-        executor = context.executor
-
-        # TODO: 实现 {display} 的逻辑
-
-        return StepResult.success("{display} 完成")
+        graph = build_graph(context)
+        success = graph.run(context)
+        return (
+            StepResult.success("{display} 完成")
+            if success else StepResult.fail("{display} 失败")
+        )
 '''
 
         filepath.write_text(template, encoding="utf-8")
