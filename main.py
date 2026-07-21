@@ -32,7 +32,7 @@ def main():
     """启动 GUI 主界面"""
     from PyQt5.QtWidgets import QApplication
     from PyQt5.QtCore import Qt
-    from ui.main_window import MainWindow
+    from core.bootstrap import ApplicationBootstrap
 
     # 高 DPI 支持
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -40,16 +40,11 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("阴阳师自动化脚本")
-
-    # 设置应用样式
     app.setStyle("Fusion")
 
-    # 创建并显示主窗口
-    window = MainWindow()
-    window.show()
-
-    # 进入事件循环
-    sys.exit(app.exec_())
+    # 通过启动引导初始化所有模块
+    bootstrap = ApplicationBootstrap()
+    return bootstrap.start()
 
 
 if __name__ == "__main__":

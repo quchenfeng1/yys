@@ -43,6 +43,17 @@ class StateManager:
             new_value=value,
         )
 
+    def set_states(self, mapping: dict):
+        """批量设置状态，仅发布一次广播。
+
+        与 update_states(**kwargs) 功能相同，接受字典参数。
+        符合 07-运行时状态管理.md 的接口规范。
+
+        Args:
+            mapping: {key: value, ...} 状态字典
+        """
+        self.update_states(**mapping)
+
     def update_states(self, **kwargs):
         """批量设置状态，仅发布一次广播。"""
         changed = {}
@@ -92,7 +103,13 @@ class StateManager:
             StateKeys.CURRENT_TASK: None,
             StateKeys.CURRENT_STEP: None,
             StateKeys.TASK_PROGRESS: None,
+            StateKeys.TASK_STATUS: {},
+            StateKeys.TASK_RUNTIME_PROGRESS: {},
+            StateKeys.LAST_KNOWN_SCENE: None,
             StateKeys.SCHEDULE_QUEUE: [],
+            StateKeys.SUB_ACCOUNT_FINDINGS: {},
+            StateKeys.BEST_FINDING: None,
+            StateKeys.SUB_ACCOUNT_STATUS: {},
             StateKeys.TODAY_OPERATION_COUNT: 0,
             StateKeys.RUN_LIMIT_REACHED: False,
             StateKeys.SAFETY_PROFILE: "normal",

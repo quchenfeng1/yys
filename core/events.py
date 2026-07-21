@@ -39,5 +39,8 @@ class Events:
     CONFIG_CHANGED = "config_changed"              # ConfigManager → 相关模块
     ACCOUNT_SWITCHED = "account_switched"          # AccountManager → Connection+StateManager
 
+    # ==================== 错误事件 ====================
+    ERROR_OCCURRED = "error_occurred"              # 任意模块 → 日志监控：错误发生（含截图保存）
+
     # ==================== 日志事件 ====================
     LOG_RECORD = "log_record"                     # Monitor → UI LogPanel

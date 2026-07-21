@@ -30,6 +30,16 @@ class StateKeys:
     TASK_PROGRESS = "task_progress"        # 进度字符串 "15/30"
     SCHEDULE_QUEUE = "schedule_queue"      # 当前日程队列（任务名列表）
 
+    # ==================== 任务进度 ====================
+    TASK_STATUS = "task_status"                      # 各任务状态 dict[str, str] due/waiting/completed/skipped
+    TASK_RUNTIME_PROGRESS = "task_runtime_progress"  # 逐任务运行时进度 dict[str, RuntimeProgress]
+    LAST_KNOWN_SCENE = "last_known_scene"            # 最后确定的场景（误触/弹窗后恢复用）
+
+    # ==================== 小号状态 ====================
+    SUB_ACCOUNT_FINDINGS = "sub_account_findings"    # 小号扫描结果 dict[str, list[Finding]]
+    BEST_FINDING = "best_finding"                    # 当前最优发现物 Finding | None
+    SUB_ACCOUNT_STATUS = "sub_account_status"        # 小号实时状态 dict[str, SubStatus]
+
     # ==================== 安全状态 ====================
     TODAY_OPERATION_COUNT = "today_operation_count"  # 今日操作次数
     RUN_LIMIT_REACHED = "run_limit_reached"          # 是否已达运行上限
