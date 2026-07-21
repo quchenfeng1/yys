@@ -84,8 +84,7 @@ class Executor:
         cx, cy = result.center
         w, h = result.size if hasattr(result, 'size') and result.size else (0, 0)
         if w > 0 and h > 0:
-            click_x = cx - w // 2 + random.randint(0, w)
-            click_y = cy - h // 2 + random.randint(0, h)
+            click_x, click_y = self.anti.random_offset_in_bounds(cx - w // 2, cy - h // 2, w, h)
         else:
             click_x, click_y = self.anti.random_offset(cx, cy)
 

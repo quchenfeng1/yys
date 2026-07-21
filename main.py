@@ -29,10 +29,20 @@ os.environ.setdefault("QT_SCALE_FACTOR", "1")
 
 
 def main():
-    """启动 GUI 主界面"""
+    """启动 GUI 主界面。
+
+    当前路径（直接初始化）：
+      MainWindow() 内部自完成 ConfigManager → Scheduler → UI面板 全部初始化。
+
+    设计目标路径（通过 16-ApplicationBootstrap）：
+      from core.bootstrap import ApplicationBootstrap
+      bootstrap = ApplicationBootstrap()
+      bootstrap.initialize()  # 按7层依赖顺序初始化全部16个模块
+      ui = bootstrap.get_module("ui")
+      ui.show()
+    """
     from PyQt5.QtWidgets import QApplication
     from PyQt5.QtCore import Qt
-    from core.bootstrap import ApplicationBootstrap
 
     # 高 DPI 支持
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -42,9 +52,12 @@ def main():
     app.setApplicationName("阴阳师自动化脚本")
     app.setStyle("Fusion")
 
-    # 通过启动引导初始化所有模块
-    bootstrap = ApplicationBootstrap()
-    return bootstrap.start()
+    # ★ MainWindow 内部自动完成所有模块初始化（ConfigManager → Scheduler → UI面板）
+    from ui.main_window import MainWindow
+    window = MainWindow()
+    window.show()
+
+    return app.exec_()
 
 
 if __name__ == "__main__":

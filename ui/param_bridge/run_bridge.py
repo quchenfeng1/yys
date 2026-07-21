@@ -23,6 +23,10 @@ class RunBridge:
         """暂停按钮 → 发布 pause_requested。"""
         button.clicked.connect(lambda: event_bus.publish(Events.PAUSE_REQUESTED))
 
+    def bind_resume_button(self, button):
+        """恢复按钮 → 发布 resume_requested。"""
+        button.clicked.connect(lambda: event_bus.publish(Events.RESUME_REQUESTED))
+
     def bind_status_label(self, label):
         """状态标签 ← 订阅 run_status。"""
         from core.state_manager import state_manager

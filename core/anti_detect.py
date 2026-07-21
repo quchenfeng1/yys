@@ -73,6 +73,28 @@ class AntiDetect:
 
         return (cx + dx, cy + dy)
 
+    def random_offset_in_bounds(self, cx: int, cy: int, w: int, h: int) -> tuple:
+        """在目标矩形区域内生成随机偏移坐标。
+
+        与 random_offset 不同，此方法确保偏移后的坐标落在 (cx,cy,w,h) 矩形范围内，
+        适用于按钮等需要确保点中目标的场景。
+
+        Args:
+            cx: 矩形左上角 X
+            cy: 矩形左上角 Y
+            w: 矩形宽度
+            h: 矩形高度
+
+        Returns:
+            (x, y) 矩形内的随机坐标
+        """
+        import random as _random
+        margin_x = max(1, w // 10)
+        margin_y = max(1, h // 10)
+        x = cx + margin_x + _random.randint(0, max(1, w - 2 * margin_x))
+        y = cy + margin_y + _random.randint(0, max(1, h - 2 * margin_y))
+        return (x, y)
+
     # ===== 随机延迟 =====
 
     def random_delay(self, base: float = 1.0, jitter: float = None) -> float:

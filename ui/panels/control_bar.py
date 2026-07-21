@@ -4,7 +4,7 @@
 启动/停止/暂停三按钮 + 当前状态提示。
 """
 
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
+from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QCheckBox
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 
@@ -70,6 +70,9 @@ class ControlBar(QWidget):
     start_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
     pause_clicked = pyqtSignal()
+    resume_clicked = pyqtSignal()      # ★ 新增：恢复信号（对齐 09 模块 RESUME_REQUESTED）
+    dry_run_toggled = pyqtSignal(bool)
+    self_check_clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -110,10 +113,29 @@ class ControlBar(QWidget):
 
         layout.addStretch()
 
+        # 沙盒模式开关
+        self.dry_run_cb = QCheckBox("🧪 沙盒模式")
+        self.dry_run_cb.setFont(QFont("Microsoft YaHei", 9))
+        self.dry_run_cb.setStyleSheet("color: #5F6368;")
+        self.dry_run_cb.toggled.connect(self.dry_run_toggled.emit)
+        layout.addWidget(self.dry_run_cb)
+
+        # 启动前自检按钮
+        self.self_check_btn = QPushButton("🔍 自检")
+        self.self_check_btn.setFont(QFont("Microsoft YaHei", 9))
+        self.self_check_btn.setStyleSheet("""
+            QPushButton { background: transparent; color: #5F6368; border: 1px solid #DADCE0;
+            border-radius: 6px; padding: 4px 12px; }
+            QPushButton:hover { background: #F0F4FF; border-color: #1A73E8; color: #1A73E8; }
+        """)
+        self.self_check_btn.clicked.connect(self.self_check_clicked.emit)
+        layout.addWidget(self.self_check_btn)
+
     def _on_start(self):
         if self._paused:
+            # 暂停态 → 恢复运行
             self.set_running(True)
-            self.pause_clicked.emit()  # 复用暂停信号表示恢复
+            self.resume_clicked.emit()
         else:
             self.set_running(True)
             self.start_clicked.emit()
@@ -164,3 +186,17 @@ class ControlBar(QWidget):
         self.pause_btn.setEnabled(False)
         self.status_label.setText("●  就绪")
         self.status_label.setStyleSheet("color: #80868B; margin-left: 12px;")
+
+    def set_stopping(self):
+        """优雅停止中（对齐 09 模块 RunState.STOPPING）。"""
+        self._running = False
+        self._paused = False
+        self.start_btn.setStyleSheet(BTN_STYLE_DISABLED)
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setText("⏳  停止中")
+        self.stop_btn.setStyleSheet(BTN_STYLE_STOP.replace("EA4335", "#F9AB00").replace("C5221F", "#E8A000"))
+        self.stop_btn.setEnabled(False)
+        self.pause_btn.setStyleSheet(BTN_STYLE_DISABLED)
+        self.pause_btn.setEnabled(False)
+        self.status_label.setText("⏳  停止中...")
+        self.status_label.setStyleSheet("color: #F9AB00; font-weight: bold; margin-left: 12px;")

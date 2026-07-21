@@ -124,6 +124,27 @@ class ScriptWorker(QThread):
         if self.login_flow:
             self.log("(当前步骤完成后将停止)")
 
+    def pause(self):
+        """暂停执行（设置暂停标志，工作循环检测后等待）。"""
+        self._mutex.lock()
+        self._paused = True
+        self._mutex.unlock()
+        self.log("脚本已暂停")
+
+    def resume(self):
+        """恢复执行（清除暂停标志）。"""
+        self._mutex.lock()
+        self._paused = False
+        self._mutex.unlock()
+        self.log("脚本已恢复")
+
+    def is_paused(self) -> bool:
+        """检查是否处于暂停状态。"""
+        self._mutex.lock()
+        val = getattr(self, '_paused', False)
+        self._mutex.unlock()
+        return val
+
     def is_stopped(self) -> bool:
         """检查是否被请求停止"""
         self._mutex.lock()
@@ -279,7 +300,7 @@ class ScriptWorker(QThread):
         )
 
         anti_detect = AntiDetect(self.config.global_config)
-        self.executor = Executor(self.adb, self.recognizer, anti_detect)
+        self.executor = Executor(self.recognizer, anti_detect, self.adb)
         self.log("核心模块初始化完成")
 
         if self.is_stopped():

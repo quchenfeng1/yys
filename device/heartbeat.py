@@ -54,7 +54,7 @@ class HeartbeatMonitor:
                 break
 
             if not self._connection.is_connected():
-                device_id = self._connection._active_device_id
+                device_id = self._connection.active_device_id
                 event_bus.publish(Events.CONNECTION_LOST, device_id=device_id)
 
                 if self._auto_reconnect:

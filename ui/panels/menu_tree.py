@@ -80,6 +80,7 @@ class MenuTree(QWidget):
         for name, key in [
             ("📡 模拟器连接", "config:emulator"), ("👤 账号管理", "config:account"),
             ("📊 任务优先级", "config:priority"), ("🛡 防封号参数", "config:anti_detect"),
+            ("🔍 识别参数", "config:recognize"),
             ("⏱ 运行时段", "config:runtime"), ("👥 阵容预设", "config:teams"),
             ("📝 日志配置", "config:log"),
         ]:
@@ -119,14 +120,34 @@ class MenuTree(QWidget):
             ("📊 运行指标", "monitor:metrics"),
             ("📸 异常截图", "monitor:snapshots"),
             ("📄 运行报告", "monitor:report"),
+            ("📋 执行历史", "monitor:history"),
         ]:
             it = QTreeWidgetItem(monitor, [name]); it.setData(0, Qt.UserRole, ("monitor", key))
 
-        # === 7. 小号设置 ===
+        # === 7. UI 设置（11-用户界面模块 自控）===
+        ui_cfg = QTreeWidgetItem(self.tree, ["🎨 UI 设置"])
+        ui_cfg.setFont(0, QFont("Microsoft YaHei", 10, QFont.Bold))
+        ui_cfg.setData(0, Qt.UserRole, ("ui_settings", ""))
+
+        # === 8. 小号设置 ===
         sub = self._add_root("👥 小号设置")
-        for i in [1, 2]:
-            it = QTreeWidgetItem(sub, [f"小号 {i}"])
-            it.setData(0, Qt.UserRole, ("sub_account", f"sub{i}"))
+        # 固定二级菜单「小号配置」
+        cfg_item = QTreeWidgetItem(sub, ["⚙ 小号配置"])
+        cfg_item.setData(0, Qt.UserRole, ("sub_account", "config"))
+        # 动态填充小号快捷入口（从 accounts.yaml 读取）
+        try:
+            from core.config_manager import ConfigManager
+            cm = ConfigManager()
+            acts = cm.get("sub_accounts", [])
+            if isinstance(acts, list):
+                for acct in acts:
+                    aid = acct.get("account_id", "")
+                    nick = acct.get("nickname", aid)
+                    enabled = "🟢" if acct.get("enabled") else "⚫"
+                    it = QTreeWidgetItem(sub, [f"{enabled} {nick}"])
+                    it.setData(0, Qt.UserRole, ("sub_account_detail", aid))
+        except Exception:
+            pass
 
         self.tree.expandAll()
         layout.addWidget(self.tree)

@@ -12,7 +12,6 @@
 对应解耦文档：模块说明/05-定时模块.md
 """
 
-from datetime import datetime, timedelta
 from datetime import datetime, timedelta, date
 from typing import Optional
 
@@ -123,6 +122,28 @@ class Scheduler:
             self._store.save()
             event_bus.publish(Events.DAILY_RESET, date=today.isoformat())
             logger.info(f"每日重置已执行: {today}")
+
+    def import_calendar(self, events: list[dict]) -> int:
+        """导入游戏活动日历，自动更新任务 active_range / window。"""
+        updated = 0
+        for ev in events:
+            name = ev.get("name", "")
+            if not name:
+                continue
+            existing = self._tasks.get(name)
+            if existing:
+                existing["active_range"] = [ev.get("start"), ev.get("end")]
+                existing["window"] = ev.get("window")
+                updated += 1
+            else:
+                repeat = RepeatRule(type="special",
+                    window={"date_start": ev.get("start"), "date_end": ev.get("end")})
+                self.register_task(name=name, repeat=repeat, priority=8,
+                    category="special", enabled=True)
+                updated += 1
+        self._store.save()
+        logger.info(f"活动日历导入完成: {updated} 个任务")
+        return updated
 
     # ==================== 日程表 ====================
 
@@ -308,34 +329,20 @@ class Scheduler:
         return "waiting"
 
     def get_all_tasks(self) -> list[dict]:
-        """获取所有已注册任务（供 UI 展示）。"""
+        """获取所有已注册任务（供 UI 展示），包含完整字段。"""
         result = []
         for name, task in self._tasks.items():
+            st = self._store.get(name)
             result.append({
                 "name": name,
                 "category": task.get("category", ""),
                 "priority": task.get("priority", 10),
                 "enabled": task["enabled"],
                 "repeat_type": task["repeat"].type if task.get("repeat") else "",
-                "next_run": self.get_next_run_time(name),
-                "status": self.get_task_status(name),
-                "team_id": task.get("team_id", ""),
-            })
-        return result
-
-    def get_all_tasks(self) -> list[dict]:
-        """获取所有注册任务列表（供 UI 查询）。"""
-        result = []
-        for name, task in self._tasks.items():
-            st = self._store.get(name)
-            result.append({
-                "name": name,
-                "priority": task["priority"],
-                "category": task.get("category", ""),
-                "enabled": task["enabled"],
                 "repeat": task["repeat"].to_dict() if task["repeat"] else None,
                 "next_run": self.get_next_run_time(name),
                 "status": self.get_task_status(name),
+                "team_id": task.get("team_id", ""),
                 "today_count": st.today_count if st else 0,
                 "success_count": st.success_count if st else 0,
             })

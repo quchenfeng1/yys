@@ -17,10 +17,10 @@ class TaskContext:
     state: dict = field(default_factory=dict)        # 临时状态（步骤间传参）
 
     # 以下由框架注入
-    executor: Any = None                       # Executor
-    recognizer: Any = None                     # Recognizer
-    connection: Any = None                     # ConnectionManager
-    team_manager: Any = None                   # TeamManager
+    executor: Any = None                       # Executor（ScriptWorker 注入）
+    recognizer: Any = None                     # Recognizer（ScriptWorker 注入）
+    connection: Any = None                     # ADBClient/ConnectionManager（预留，当前通过 executor 间接使用）
+    team_manager: Any = None                   # TeamManager（设计目标，当前未注入，SelectTeam/PreCheckTeam 依赖此项）
     scheduler: Any = None                      # Scheduler（供 report_expire 等调用）
     log: Any = None                            # 日志回调: log(msg) 将消息发送到 UI 终端
 

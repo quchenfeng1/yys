@@ -1,41 +1,12 @@
-﻿# 账号管理配置（v2.0）
-# 最多 1 个主号 + 2 个小号
-
 main_account:
-  account_id: "main"
-  role: "main"
-  nickname: "主号"
-  server: "春樱共斗"
+  account_id: main
+  role: main
+  nickname: 主号
+  server: 春樱共斗
   servers_available:
-    - "春樱共斗"
-    - "秋风忆梦"
+  - 春樱共斗
+  - 秋风忆梦
   adb_port: 16384
-  device_id: "127.0.0.1:16384"
+  device_id: 127.0.0.1:16384
   enabled: true
-
-sub_accounts:
-  - account_id: "sub1"
-    role: "sub"
-    nickname: "小号1"
-    server: "春樱共斗"
-    adb_port: 16416
-    device_id: "127.0.0.1:16416"
-    enabled: false
-    dungeon_tasks:
-      - name: "yuhun"
-        enabled: true
-        times: 20
-        team_id: "yuhun_speed"
-        repeat:
-          type: "daily"
-          at_time: "14:00"
-          times: 20
-
-  - account_id: "sub2"
-    role: "sub"
-    nickname: "小号2"
-    server: "秋风忆梦"
-    adb_port: 16448
-    device_id: "127.0.0.1:16448"
-    enabled: false
-    dungeon_tasks: []
+sub_accounts: []

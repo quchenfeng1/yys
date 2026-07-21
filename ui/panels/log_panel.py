@@ -229,6 +229,11 @@ class LogStreamWidget(QWidget):
         """订阅日志事件。"""
         event_bus.subscribe(Events.LOG_RECORD, self._on_log)
 
+    def set_max_lines(self, lines: int):
+        """动态调整日志行数上限（UI 自控）。"""
+        self._max_lines = lines
+        self._text.setMaximumBlockCount(lines)
+
     def _on_log(self, **kwargs):
         """接收日志事件，追加到文本框。"""
         level = kwargs.get("level", "INFO")

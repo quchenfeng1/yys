@@ -13,6 +13,7 @@ class Events:
     START_REQUESTED = "start_requested"          # UI → RunController：用户点击启动
     STOP_REQUESTED = "stop_requested"            # UI → RunController+Scheduler+Task：用户点击停止
     PAUSE_REQUESTED = "pause_requested"          # UI → RunController：用户点击暂停
+    RESUME_REQUESTED = "resume_requested"        # UI → RunController：用户点击恢复
     RUN_STARTED = "run_started"                  # RunController → UI+StateManager：运行已启动
     RUN_PAUSED = "run_paused"                    # RunController → UI+StateManager：运行已暂停
     RUN_STOPPED = "run_stopped"                  # RunController → UI+StateManager：运行已停止

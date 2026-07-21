@@ -63,7 +63,7 @@ class ExecutionHistoryPanel(QWidget):
         self._task_combo.clear()
         self._task_combo.addItem("全部任务", None)
         if self._registry:
-            for task in self._registry.get_all():
+            for task in self._registry.get_all_tasks():
                 self._task_combo.addItem(task.display_name, task.name)
 
     def _query_history(self):

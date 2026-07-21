@@ -378,6 +378,49 @@ class {name.title().replace("_", "")}Task(TaskStep):
         event_bus.publish("task_file_created", name=name, category=category)
         return filepath
 
+    def find_missing_assets(self) -> list[str]:
+        """扫描 tasks/ 中引用的模板名，对比 assets/ 列出缺失的素材。
+
+        Returns:
+            缺失素材的相对路径列表，如 ["common/battle/challenge_btn", ...]
+        """
+        import re
+        missing = []
+        assets_dir = self._root / "assets"
+        if not assets_dir.exists():
+            return []
+
+        # 收集 assets/ 中全部 .png 的 stem（不含扩展名和路径）
+        existing = set()
+        for png in assets_dir.rglob("*.png"):
+            # 构造相对于 assets/ 的模板路径格式: "common/battle/challenge_btn"
+            rel = png.relative_to(assets_dir)
+            existing.add(str(rel.with_suffix("")).replace("\\", "/"))
+
+        # 扫描 tasks/ 中所有 .py 文件引用的模板
+        template_pattern = re.compile(
+            r'''["']((?:common|scenes|tasks|teams)/[\w/\-]+)["']''')
+        referenced = set()
+        for py_file in self._tasks_dir.rglob("*.py"):
+            if py_file.name.startswith("_"):
+                continue
+            try:
+                content = py_file.read_text(encoding="utf-8")
+                for m in template_pattern.finditer(content):
+                    ref = m.group(1).replace("\\", "/").rstrip("/")
+                    referenced.add(ref)
+            except Exception:
+                pass
+
+        # 找出引用但不在 assets/ 中的
+        for ref in sorted(referenced):
+            if ref not in existing and not ref.endswith(".py"):
+                missing.append(ref)
+
+        if missing:
+            event_bus.publish("assets_missing", missing=missing)
+        return missing
+
     def delete_task(self, module: TaskModule) -> bool:
         """删除任务文件（移至回收站逻辑：重命名为 .deleted）。"""
         path = Path(module.filepath)

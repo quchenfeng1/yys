@@ -128,6 +128,33 @@ class Recognizer:
         """检查素材是否存在"""
         return template_name in self._templates
 
+    def suggest_template(self, screenshot: "np.ndarray") -> str:
+        """将截图与所有已知模板对比，返回最匹配的模板名。
+
+        用于未知场景自动收藏：当 Executor.detect_scene() 不确定当前场景时，
+        调用此方法遍历所有素材找出最匹配的模板。
+
+        Args:
+            screenshot: OpenCV BGR 格式截图
+
+        Returns:
+            最匹配的模板索引名，若无匹配返回空字符串
+        """
+        best_name = ""
+        best_score = 0.0
+        if not self._templates:
+            return ""
+        screen_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY) if self.grayscale else screenshot
+        for name, (tpl_gray, tw, th) in self._templates.items():
+            if tw > screen_gray.shape[1] or th > screen_gray.shape[0]:
+                continue
+            result = cv2.matchTemplate(screen_gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > best_score:
+                best_score = max_val
+                best_name = name
+        return best_name if best_score >= self.threshold else ""
+
     def _get_template(self, template_name: str):
         """获取模板图片"""
         if template_name not in self._templates:

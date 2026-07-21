@@ -49,9 +49,9 @@ class ApplicationBootstrap:
 
     def initialize(self) -> None:
         """按初始化顺序创建所有模块实例"""
-        # 第1层：基础设施
-        config = self._init_config()
+        # 第1层：基础设施 — 事件总线必须在配置之前初始化
         event_bus = self._init_event_bus()
+        config = self._init_config()
         # 第2层：基础服务
         monitor = self._init_monitor(config, event_bus)
         state_manager = self._init_state_manager(event_bus)
@@ -109,7 +109,8 @@ class ApplicationBootstrap:
 
     def _init_config(self):
         from core.config_manager import ConfigManager
-        inst = ConfigManager(self._get_dep("event_bus"), self._get_dep("monitor", required=False))
+        # ConfigManager 是单例模式，__init__() 无参数，通过 load() 加载配置
+        inst = ConfigManager()
         inst.load()
         self._modules["config"] = inst
         return inst
@@ -122,37 +123,40 @@ class ApplicationBootstrap:
 
     def _init_monitor(self, config, event_bus):
         from core.monitor import Monitor
-        inst = Monitor(config, event_bus)
+        inst = Monitor(config)  # Monitor 只接受 config
         self._modules["monitor"] = inst
         return inst
 
     def _init_state_manager(self, event_bus):
-        from core.state_manager import StateManager
-        inst = StateManager(event_bus)
-        self._modules["state_manager"] = inst
-        return inst
+        from core.state_manager import state_manager
+        # StateManager 是全局单例
+        self._modules["state_manager"] = state_manager
+        return state_manager
 
     def _init_connection(self, config, event_bus, state_manager):
         from device.connection import ConnectionManager
-        inst = ConnectionManager(config, event_bus, state_manager)
+        inst = ConnectionManager(config)
         self._modules["connection"] = inst
         return inst
 
     def _init_recognizer(self, connection, config, monitor):
         from core.recognizer import Recognizer
-        inst = Recognizer(connection, config, monitor)
+        # Recognizer 需要 screenshot_func（由 connection 提供）
+        inst = Recognizer(screenshot_func=connection.screenshot,
+                          threshold=config.get("recognize.threshold", 0.8),
+                          grayscale=config.get("recognize.grayscale", True))
         self._modules["recognizer"] = inst
         return inst
 
     def _init_anti_detect(self, config, monitor):
         from core.anti_detect import AntiDetect
-        inst = AntiDetect(config, monitor)
+        inst = AntiDetect(config.global_config if hasattr(config, 'global_config') else config)
         self._modules["anti_detect"] = inst
         return inst
 
     def _init_scheduler(self, config, state_manager, event_bus):
         from core.scheduler import Scheduler
-        inst = Scheduler(config, state_manager, event_bus)
+        inst = Scheduler(config, state_manager)
         inst.load_state()
         self._modules["scheduler"] = inst
         return inst
@@ -179,15 +183,12 @@ class ApplicationBootstrap:
 
     def _init_param_bridge(self, config, event_bus, state_manager, scheduler):
         from ui.param_bridge.ui_binding import UIBinding
-        from ui.param_bridge.schemas import ParamSchemas
         from ui.param_bridge.run_bridge import RunBridge
         from ui.param_bridge.task_bridge import TaskBridge
-        schemas = ParamSchemas()
-        binding = UIBinding(config, event_bus, state_manager)
-        run_bridge = RunBridge(event_bus)
-        task_bridge = TaskBridge(config, scheduler)
+        binding = UIBinding(config, state_manager, scheduler)
+        run_bridge = RunBridge()  # RunBridge 无参构造
+        task_bridge = TaskBridge(config, scheduler, state_manager)
         self._modules["param_bridge"] = {
-            "schemas": schemas,
             "binding": binding,
             "run_bridge": run_bridge,
             "task_bridge": task_bridge,
@@ -220,7 +221,8 @@ class ApplicationBootstrap:
 
     def _init_ui(self, param_bridge, event_bus, task_registry, task_manager):
         from ui.main_window import MainWindow
-        inst = MainWindow(param_bridge, event_bus, task_registry, task_manager)
+        # MainWindow 无参构造，内部自完成所有模块初始化
+        inst = MainWindow()
         self._modules["ui"] = inst
         return inst
 
@@ -255,7 +257,7 @@ class ApplicationBootstrap:
         # 检查任务注册
         try:
             te = self.get_module("task_engine")
-            results["tasks"] = len(te.get_all()) > 0 if te else False
+            results["tasks"] = len(te) > 0 if isinstance(te, dict) else False
         except Exception:
             results["tasks"] = False
         return results

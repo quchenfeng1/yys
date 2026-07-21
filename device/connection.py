@@ -69,6 +69,11 @@ class ConnectionManager:
             return self._adb_clients[did].is_connected()
         return False
 
+    @property
+    def active_device_id(self) -> Optional[str]:
+        """当前活跃设备ID（公开只读）。"""
+        return self._active_device_id
+
     def get_active_device(self) -> ADBClient:
         """获取当前操作的设备客户端。"""
         if self._active_device_id and self._active_device_id in self._adb_clients:

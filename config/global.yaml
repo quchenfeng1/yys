@@ -30,3 +30,7 @@ screen:
   dpi: 240
   height: 720
   width: 1280
+ui:
+  font_size: 12
+  max_log_lines: 10000
+  refresh_interval: 2000

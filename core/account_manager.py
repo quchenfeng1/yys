@@ -48,18 +48,54 @@ class AccountManager:
     # ── 公开方法 ──────────────────────────────────────────────
 
     def load_accounts(self) -> None:
-        """从 accounts.yaml 加载全部账号配置"""
-        raw = self._config.get("accounts", {})
-        for acc_id, info in raw.items():
-            self._accounts[acc_id] = AccountInfo(
-                id=acc_id,
-                role=info.get("role", "sub"),
-                device_id=info.get("device_id", ""),
-                server=info.get("server", ""),
-                task_scope=info.get("task_scope", ["permanent"]),
-                team_group=info.get("team_group", ""),
-                teaming_enabled=info.get("teaming_enabled", False),
-            )
+        """从 accounts.yaml 加载全部账号配置。
+
+        兼容两种 yaml 格式：
+          - 新版：{main_account: {...}, sub_accounts: [...]}
+          - 旧版：{accounts: {main: {...}, sub1: {...}}}
+        """
+        raw = self._config.get("accounts", None)
+        if raw:
+            # 旧版格式：{main: {...}, sub1: {...}}
+            for acc_id, info in raw.items():
+                self._accounts[acc_id] = AccountInfo(
+                    id=acc_id,
+                    role=info.get("role", "sub"),
+                    device_id=info.get("device_id", ""),
+                    server=info.get("server", ""),
+                    task_scope=info.get("task_scope", ["permanent"]),
+                    team_group=info.get("team_group", ""),
+                    teaming_enabled=info.get("teaming_enabled", False),
+                )
+        else:
+            # 新版格式：{main_account: {...}, sub_accounts: [...]}
+            main = self._config.get("main_account", {})
+            if main:
+                aid = main.get("account_id", "main")
+                self._accounts[aid] = AccountInfo(
+                    id=aid,
+                    role="main",
+                    device_id=main.get("device_id", ""),
+                    server=main.get("server", ""),
+                    task_scope=main.get("task_scope", ["daily", "permanent", "event", "special"]),
+                    team_group=main.get("team_group", ""),
+                    teaming_enabled=main.get("teaming_enabled", False),
+                )
+            subs = self._config.get("sub_accounts", [])
+            if isinstance(subs, list):
+                for sub in subs:
+                    aid = sub.get("account_id", "")
+                    if not aid:
+                        continue
+                    self._accounts[aid] = AccountInfo(
+                        id=aid,
+                        role="sub",
+                        device_id=sub.get("device_id", sub.get("adb_port", "")),
+                        server=sub.get("server", ""),
+                        task_scope=sub.get("task_scope", ["permanent"]),
+                        team_group=sub.get("team_group", ""),
+                        teaming_enabled=sub.get("teaming_enabled", False),
+                    )
         # 默认选中第一个 main 账号
         if "main" in self._accounts:
             self._current_id = "main"
@@ -161,3 +197,7 @@ class AccountManager:
         idx = ids.index(self._current_id)
         next_idx = (idx + 1) % len(ids)
         return self.switch_to(ids[next_idx])
+
+
+# 全局单例（main.py 中初始化）
+account_manager: AccountManager | None = None

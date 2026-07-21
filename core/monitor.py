@@ -95,6 +95,90 @@ class Monitor:
     def generate_weekly_report(self, week_end=None) -> str:
         return self._report.generate_weekly(week_end)
 
+    # ==================== 通知推送 ====================
+
+    def notify(self, level: str, title: str, message: str):
+        """发送通知推送。"""
+        self.log(level.upper(), f"[{title}] {message}", module="monitor", tags=["notify"])
+
+    # ==================== 任务历史查询 ====================
+
+    def query_task_history(self, task_name: str, query_date: str = None) -> list[dict]:
+        """查询指定任务在指定日期的执行历史记录。"""
+        target_date = query_date or __import__('datetime').date.today().isoformat()
+        filepath = __import__('os').path.join(self._structured_dir, f"{target_date}.jsonl")
+        records = []
+        if not __import__('os').path.exists(filepath):
+            return records
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        entry = __import__('json').loads(line)
+                        if entry.get("task") == task_name:
+                            records.append(entry)
+                    except __import__('json').JSONDecodeError:
+                        continue
+        except Exception:
+            pass
+        return records
+
+    def estimate_eta(self, queue: list[str]) -> str:
+        """根据历史指标估算队列剩余时间。"""
+        total_seconds = 0
+        for task_name in queue:
+            metrics = self._metrics.get(task_name)
+            if metrics and metrics.get("avg_duration"):
+                total_seconds += metrics["avg_duration"]
+        if total_seconds == 0:
+            return "未知"
+        from datetime import datetime, timedelta
+        eta = datetime.now() + timedelta(seconds=total_seconds)
+        return eta.strftime("%H:%M")
+
+    # ==================== 日志检索 ====================
+
+    def query_logs(self, level: str = None, module: str = None,
+                   task_name: str = None, time_range: str = None,
+                   keyword: str = None, limit: int = 100) -> list[dict]:
+        """检索历史日志（按级别/模块/任务/时间/关键词筛选）。"""
+        from datetime import date, timedelta
+        results = []
+        if time_range == "today":
+            dates = [date.today().isoformat()]
+        elif time_range == "yesterday":
+            dates = [(date.today() - timedelta(days=1)).isoformat()]
+        elif time_range and len(time_range) == 10:
+            dates = [time_range]
+        else:
+            dates = [(date.today() - timedelta(days=i)).isoformat() for i in range(7)]
+
+        for d in dates:
+            filepath = os.path.join(self._structured_dir, f"{d}.jsonl")
+            if not os.path.exists(filepath):
+                continue
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            entry = json.loads(line)
+                            if level and entry.get("level", "").upper() != level.upper():
+                                continue
+                            if module and module.lower() not in entry.get("module", "").lower():
+                                continue
+                            if task_name and entry.get("task") != task_name:
+                                continue
+                            if keyword and keyword.lower() not in entry.get("message", "").lower():
+                                continue
+                            results.append(entry)
+                            if len(results) >= limit:
+                                return results
+                        except json.JSONDecodeError:
+                            continue
+            except Exception:
+                pass
+        return results
+
     # ==================== 内部 ====================
 
     def _on_task_done(self, task_name: str, success: bool, **kw):
@@ -109,3 +193,7 @@ class Monitor:
                 f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
         except Exception:
             pass  # 日志写入失败不阻断业务
+
+
+# 全局单例（main.py 中初始化）
+monitor: Monitor | None = None

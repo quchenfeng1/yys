@@ -34,3 +34,45 @@ class ConfigBridge:
         if current in options:
             widget.setCurrentText(current)
         widget.currentTextChanged.connect(lambda v: self._config.set(config_key, v))
+
+    def bind_timeedit(self, widget, config_key: str):
+        """时间编辑器 ↔ 配置（格式 HH:mm）。"""
+        from PyQt5.QtCore import QTime
+        val = self._config.get(config_key, "08:00")
+        widget.setTime(QTime.fromString(val, "HH:mm"))
+        widget.timeChanged.connect(
+            lambda t: self._config.set(config_key, t.toString("HH:mm"))
+        )
+
+    # ==================== 配置管理操作 ====================
+
+    def export_config(self) -> str | None:
+        """导出配置到 zip 文件，返回路径。"""
+        from PyQt5.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(None, "导出配置", "config_backup.zip", "ZIP (*.zip)")
+        if path:
+            self._config.export_config(path)
+            return path
+        return None
+
+    def import_config(self) -> str | None:
+        """从 zip 文件导入配置，返回路径。"""
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        path, _ = QFileDialog.getOpenFileName(None, "导入配置", "", "ZIP (*.zip)")
+        if path:
+            reply = QMessageBox.question(None, "确认导入",
+                f"将从备份恢复配置，当前配置将被覆盖。继续？",
+                QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self._config.import_config(path)
+                self._config.reload()
+                return path
+        return None
+
+    def reload_config(self):
+        """热重载配置。"""
+        self._config.reload()
+
+    def validate_config(self) -> list[str]:
+        """校验配置，返回错误列表。"""
+        return self._config.validate()
