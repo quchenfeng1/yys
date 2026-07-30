@@ -1,7 +1,0 @@
-{
-  "scene_marker": "scenes/courtyard/main",
-  "icons": {
-    "explore": "scenes/courtyard/icon_explore",
-    "town": "scenes/courtyard/icon_town"
-  }
-}
