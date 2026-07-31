@@ -14,7 +14,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QPushButton, QScrollArea, QSpinBox,
-    QVBoxLayout, QWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 # 设计书 §5.2 重复规则（on_enter 由配置文件直接设置，不在表单下拉）
@@ -144,6 +144,15 @@ class GameTaskPanel(QWidget):
         w["enabled"] = cb_enabled
         self.form_layout.addWidget(cb_enabled)
 
+        # ── 双 Tab：执行配置 / 战斗配置 ──
+        self._uses_battle = uses_battle
+        tabs = QTabWidget()
+
+        # ══════════ Tab1 执行配置 ══════════
+        tab_exec = QWidget()
+        te = QVBoxLayout(tab_exec)
+        te.setContentsMargins(6, 6, 6, 6)
+
         # ── ⏱ 时间调度（必配） ──
         g_sched = QGroupBox("⏱ 时间调度（必配）")
         f_sched = QFormLayout(g_sched)
@@ -241,7 +250,7 @@ class GameTaskPanel(QWidget):
         # 重复规则类型切换 → 联动启用/禁用
         cb_repeat.currentIndexChanged.connect(self._update_repeat_fields)
 
-        self.form_layout.addWidget(g_sched)
+        te.addWidget(g_sched)
 
         # ── 📊 执行模式（必配，设计书 §5.2 execution_mode） ──
         g_freq = QGroupBox("📊 执行模式（必配）")
@@ -265,49 +274,7 @@ class GameTaskPanel(QWidget):
         f_freq.addRow("每轮循环:", sp_loop)  # 任务体内 BattleLoop 次数
         w["loop_count"] = sp_loop
 
-        self.form_layout.addWidget(g_freq)
-
-        # ── ⚔ 战斗配置（uses_battle=True 显示） ──
-        if uses_battle:
-            g_battle = QGroupBox("⚔ 战斗配置")
-            f_battle = QFormLayout(g_battle)
-
-            ed_team = QLineEdit(detail.get("team_id") or "")
-            ed_team.setPlaceholderText("选择或输入阵容 ID")
-            f_battle.addRow("阵容预设:", ed_team)
-            w["team_id"] = ed_team
-
-            ed_soul = QLineEdit(detail.get("soul_setup") or "")
-            ed_soul.setPlaceholderText("御魂方案名（uses_soul=True 时生效）")
-            f_battle.addRow("御魂方案:", ed_soul)
-            w["soul_setup"] = ed_soul
-
-            sp_floor = QSpinBox()
-            sp_floor.setRange(1, 999)
-            sp_floor.setSpecialValueText("默认")
-            sp_floor.setValue(int(detail.get("floor") or 0))
-            f_battle.addRow("副本层数:", sp_floor)
-            w["floor"] = sp_floor
-
-            sp_fail = QSpinBox()
-            sp_fail.setRange(1, 99)
-            sp_fail.setValue(int(detail.get("max_fail_streak") or 10))
-            f_battle.addRow("失败容忍:", sp_fail)
-            w["max_fail_streak"] = sp_fail
-
-            self.form_layout.addWidget(g_battle)
-
-        # ── 🍃 体力配置（uses_stamina=True 显示） ──
-        if uses_stamina:
-            g_sta = QGroupBox("🍃 体力配置")
-            f_sta = QFormLayout(g_sta)
-            sp_stamina = QSpinBox()
-            sp_stamina.setRange(0, 999)
-            sp_stamina.setSpecialValueText("不检查")
-            sp_stamina.setValue(int(detail.get("stamina_required") or 0))
-            f_sta.addRow("体力门槛:", sp_stamina)
-            w["stamina_required"] = sp_stamina
-            self.form_layout.addWidget(g_sta)
+        te.addWidget(g_freq)
 
         # ── 其他：优先级 / 下次执行 ──
         g_other = QGroupBox("其他")
@@ -324,7 +291,90 @@ class GameTaskPanel(QWidget):
         w["next_run_time"] = ed_next
         self._loaded_next_run = detail.get("next_run_time") or ""
 
-        self.form_layout.addWidget(g_other)
+        te.addWidget(g_other)
+        te.addStretch(1)
+        tabs.addTab(tab_exec, "⚙ 执行配置")
+
+        # ══════════ Tab2 战斗配置（uses_battle=True） ══════════
+        if uses_battle:
+            tab_battle = QWidget()
+            tb = QVBoxLayout(tab_battle)
+            tb.setContentsMargins(6, 6, 6, 6)
+
+            # ── 🎴 御魂配置（选择御魂） ──
+            g_soul = QGroupBox("🎴 御魂配置（选择御魂）")
+            f_soul = QFormLayout(g_soul)
+            _soul = detail.get("soul_setup") if isinstance(detail.get("soul_setup"), dict) else {}
+            ed_grp = QLineEdit(str(_soul.get("group", "")))
+            ed_grp.setPlaceholderText("组名，如：御魂副本")
+            f_soul.addRow("组名:", ed_grp)
+            w["soul_group"] = ed_grp
+            ed_steam = QLineEdit(str(_soul.get("team", "")))
+            ed_steam.setPlaceholderText("队伍名，如：御魂十层")
+            f_soul.addRow("队伍名:", ed_steam)
+            w["soul_team"] = ed_steam
+            _pos = _soul.get("position") or [1, 1]
+            sp_pg = QSpinBox()
+            sp_pg.setRange(1, 99)
+            sp_pg.setValue(int(_pos[0]) if len(_pos) > 0 and _pos[0] else 1)
+            f_soul.addRow("位置·分组序号:", sp_pg)  # 第 N 个分组按钮
+            w["soul_pos_group"] = sp_pg
+            sp_pt = QSpinBox()
+            sp_pt.setRange(1, 99)
+            sp_pt.setValue(int(_pos[1]) if len(_pos) > 1 and _pos[1] else 1)
+            f_soul.addRow("位置·队伍序号:", sp_pt)  # 第 M 个队伍名
+            w["soul_pos_team"] = sp_pt
+            tb.addWidget(g_soul)
+
+            # ── 🛡 战前准备 ──
+            g_prep = QGroupBox("🛡 战前准备")
+            f_prep = QFormLayout(g_prep)
+            cb_lock = QCheckBox("锁定队伍（选是则无法更换）")
+            cb_lock.setChecked(bool(detail.get("lock_team", False)))
+            f_prep.addRow("是否锁定队伍:", cb_lock)
+            w["lock_team"] = cb_lock
+            cb_chg = QCheckBox("更换队伍（第1次战斗前解锁，第2次战斗前锁定）")
+            cb_chg.setChecked(bool(detail.get("change_team", False)))
+            f_prep.addRow("是否更换队伍:", cb_chg)
+            w["change_team"] = cb_chg
+            tb.addWidget(g_prep)
+
+            # ── ⚔ 战斗参数 ──
+            g_bparam = QGroupBox("⚔ 战斗参数")
+            f_bparam = QFormLayout(g_bparam)
+            ed_teamid = QLineEdit(detail.get("team_id") or "")
+            ed_teamid.setPlaceholderText("选择或输入阵容 ID")
+            f_bparam.addRow("阵容预设:", ed_teamid)
+            w["team_id"] = ed_teamid
+            sp_floor = QSpinBox()
+            sp_floor.setRange(1, 999)
+            sp_floor.setSpecialValueText("默认")
+            sp_floor.setValue(int(detail.get("floor") or 0))
+            f_bparam.addRow("副本层数:", sp_floor)
+            w["floor"] = sp_floor
+            sp_fail = QSpinBox()
+            sp_fail.setRange(1, 99)
+            sp_fail.setValue(int(detail.get("max_fail_streak") or 10))
+            f_bparam.addRow("失败容忍:", sp_fail)
+            w["max_fail_streak"] = sp_fail
+            tb.addWidget(g_bparam)
+
+            # ── 🍃 体力配置（uses_stamina=True 显示） ──
+            if uses_stamina:
+                g_sta = QGroupBox("🍃 体力配置")
+                f_sta = QFormLayout(g_sta)
+                sp_stamina = QSpinBox()
+                sp_stamina.setRange(0, 999)
+                sp_stamina.setSpecialValueText("不检查")
+                sp_stamina.setValue(int(detail.get("stamina_required") or 0))
+                f_sta.addRow("体力门槛:", sp_stamina)
+                w["stamina_required"] = sp_stamina
+                tb.addWidget(g_sta)
+
+            tb.addStretch(1)
+            tabs.addTab(tab_battle, "⚔ 战斗配置")
+
+        self.form_layout.addWidget(tabs)
 
         # 💾 保存
         btn_save = QPushButton("💾 保存配置")
@@ -480,12 +530,28 @@ class GameTaskPanel(QWidget):
             config["max_fail_streak"] = w["max_fail_streak"].value()
         if "team_id" in w:
             config["team_id"] = w["team_id"].text().strip() or None
-        if "soul_setup" in w:
-            config["soul_setup"] = w["soul_setup"].text().strip() or None
         if "floor" in w:
             config["floor"] = w["floor"].value() or None
         if "stamina_required" in w:
             config["stamina_required"] = w["stamina_required"].value()
+
+        # ── 战斗配置（战斗配置 Tab，uses_battle=True 时） ──
+        if getattr(self, "_uses_battle", False):
+            # 御魂配置：组名 / 队伍名 / 位置 [分组序号, 队伍序号]
+            if "soul_group" in w:
+                config["soul_setup"] = {
+                    "group": w["soul_group"].text().strip(),
+                    "team": w["soul_team"].text().strip() if "soul_team" in w else "",
+                    "position": [
+                        w["soul_pos_group"].value() if "soul_pos_group" in w else 1,
+                        w["soul_pos_team"].value() if "soul_pos_team" in w else 1,
+                    ],
+                }
+            # 战前准备：是否锁定 / 是否更换队伍
+            if "lock_team" in w:
+                config["lock_team"] = w["lock_team"].isChecked()
+            if "change_team" in w:
+                config["change_team"] = w["change_team"].isChecked()
         return config
 
     def _save(self) -> None:

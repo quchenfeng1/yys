@@ -56,5 +56,12 @@ tasks:
   floor: 10
   time_slots: null
   max_fail_streak: 10
-  soul_setup: null
+  soul_setup:
+    group: 御魂副本
+    team: 御魂十层
+    position:
+    - 4
+    - 1
+  lock_team: true
+  change_team: true
   stamina_required: 0
