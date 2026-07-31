@@ -30,7 +30,7 @@ class Events:
     TASK_STARTED: Final[str] = "task.started"
     TASK_COMPLETED: Final[str] = "task.completed"
     TASK_FAILED: Final[str] = "task.failed"
-    TASK_SKIPPED: Final[str] = "task.skipped"
+    TASK_SKIPPED: Final[str] = "task_skipped"  # 与调度段统一，避免重复定义
     TASK_PROGRESS: Final[str] = "task.progress"
     TASK_TIMEOUT: Final[str] = "task.timeout"
     TASK_INTERRUPTED: Final[str] = "task.interrupted"
@@ -106,8 +106,10 @@ class Events:
     # ── 调度事件 schedule ───────────────────────────────────
     SCHEDULE_UPDATED: Final[str] = "schedule_updated"
     DAILY_RESET: Final[str] = "daily_reset"
-    TASK_SKIPPED: Final[str] = "task_skipped"
     TASK_DUE: Final[str] = "task_due"
+
+    # ── 触发监控 trigger ────────────────────────────────────
+    TRIGGER_DETECTED: Final[str] = "trigger_detected"  # TriggerWatcher 识别命中触发模板，05 订阅后置任务为到期
 
     # ── 运行限制 run_limit ──────────────────────────────────
     RUN_LIMIT_REACHED: Final[str] = "run_limit_reached"

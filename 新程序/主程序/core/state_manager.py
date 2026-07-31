@@ -44,7 +44,9 @@ class StateManager:
     ):
         self._lock = threading.RLock()
         self._store: dict[str, Any] = {}
-        self._bus = event_bus or get_global_bus()
+        self._state = self._store  # 说明书 §2.3 要求名
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
 
         # §4.3 非持久化：persist 为可选功能，默认关闭
         self._persist_path = Path(persist_path) if persist_path else None
@@ -213,8 +215,9 @@ class StateManager:
     # ── 重置白名单（§2.3 + §5.2）────────────────────────────
 
     def add_reset_whitelist(self, key: str) -> None:
-        """添加重置白名单（reset 时保留）"""
-        self._reset_whitelist.add(key)
+        """添加重置白名单（reset 时保留，§5.2）"""
+        with self._lock:
+            self._reset_whitelist.add(key)
 
     # ── 写入（§3.1 + §5.2）────────────────────────────────────
 
@@ -242,8 +245,14 @@ class StateManager:
         with self._lock:
             old = self._store.get(key)
 
-            # §3.1 同引用检测
+            # §3.1 同引用检测：警告可能通过 get_state 直接修改了可变对象
             if value is old:
+                import logging
+                logging.warning(
+                    "状态键 '%s' 的 set_state 收到了与旧值相同的对象引用，"
+                    "可能通过 get_state 直接修改了可变对象",
+                    key,
+                )
                 return
             if old == value:
                 return

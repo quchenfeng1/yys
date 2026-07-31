@@ -48,6 +48,28 @@ class TaskResult:
         return self.reason
 
 
+class _StepResultFactory:
+    """
+    设计书兼容描述符：既作实例布尔属性（result.success），
+    又作类级构造工厂（StepResult.success("已进入副本")，设计书 §8.2 写法）。
+    """
+
+    def __init__(self, status: StepStatus):
+        self._target = status
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            # 类访问 → 返回构造工厂（设计书写法）
+            target = self._target
+
+            def factory(message: str = "", **kw):
+                return StepResult(status=target, message=message, **kw)
+
+            return factory
+        # 实例访问 → 返回布尔（现有代码写法）
+        return getattr(obj, 'status', None) == self._target
+
+
 @dataclass
 class StepResult:
     """步骤执行结果（§5.2）"""
@@ -59,7 +81,8 @@ class StepResult:
     next_step: str | None = None  # 显式指定下一步（条件跳转时用）
     data: dict[str, Any] = field(default_factory=dict)
 
-    @property
-    def success(self) -> bool:
-        """向后兼容：success=True 等价于 status==SUCCESS"""
-        return self.status == StepStatus.SUCCESS
+    # 设计书 §8.2 类级构造工厂 + 实例布尔属性（描述符二合一）
+    success = _StepResultFactory(StepStatus.SUCCESS)
+    fail = _StepResultFactory(StepStatus.FAIL)
+    skip = _StepResultFactory(StepStatus.SKIP)
+    retry = _StepResultFactory(StepStatus.RETRY)

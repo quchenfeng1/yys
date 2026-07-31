@@ -53,7 +53,8 @@ class AntiDetect:
         action_jitter: bool = True,
         random_fail_rate: float = 0.02,
     ):
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._monitor = monitor
         self._config = config
         self._lock = threading.Lock()
@@ -163,15 +164,30 @@ class AntiDetect:
     def generate_trajectory(
         self, from_x: int, from_y: int, to_x: int, to_y: int, steps: int = 12
     ) -> list[tuple[int, int]]:
-        """贝塞尔曲线路径点。FAST/DEBUG 返回空列表跳过轨迹。"""
+        """
+        三次贝塞尔曲线路径点（4 控制点：起点 P0，终点 P3，两个中间控制点 P1、P2）。
+        FAST/DEBUG 返回空列表跳过轨迹。
+        """
         if self._profile_name in ("fast", "debug") or steps <= 0:
             return []
-        cx, cy = (from_x + to_x) // 2, min(from_y, to_y) - abs(to_y - from_y) // 3
+        # 两个中间控制点：P1 偏向起点的前进方向，P2 偏向终点的后退方向
+        dx = to_x - from_x
+        dy = to_y - from_y
+        dist = max(abs(dx), abs(dy), 1)
+        # P1: 从起点沿方向 1/3 处 + 垂直偏移
+        p1x = from_x + dx // 3 + random.randint(-dist // 6, dist // 6)
+        p1y = from_y + dy // 3 - abs(dx) // 4
+        # P2: 从终点反向 1/3 处 + 垂直偏移
+        p2x = to_x - dx // 3 + random.randint(-dist // 6, dist // 6)
+        p2y = to_y - dy // 3 + abs(dx) // 4
+
         points = []
         for i in range(steps + 1):
             t = i / steps
-            x = (1 - t) ** 2 * from_x + 2 * (1 - t) * t * cx + t ** 2 * to_x
-            y = (1 - t) ** 2 * from_y + 2 * (1 - t) * t * cy + t ** 2 * to_y
+            u = 1.0 - t
+            # 三次贝塞尔: B(t) = u³P0 + 3u²tP1 + 3ut²P2 + t³P3
+            x = u ** 3 * from_x + 3 * u ** 2 * t * p1x + 3 * u * t ** 2 * p2x + t ** 3 * to_x
+            y = u ** 3 * from_y + 3 * u ** 2 * t * p1y + 3 * u * t ** 2 * p2y + t ** 3 * to_y
             points.append((int(x), int(y)))
         return points
 
@@ -272,7 +288,6 @@ class AntiDetect:
                 "count": self._action_count,
                 "profile": self._profile_name,
             })
-            self._check_drift()
 
     def check_rate_limit(self) -> None:
         """检查操作频率"""
@@ -360,7 +375,7 @@ class AntiDetect:
             self._apply_drift()
 
     def _apply_drift(self) -> None:
-        """执行参数漂移"""
+        """执行参数漂移（同时更新 _profile_params 和运行期属性）"""
         amp = self._drift_amplitude
         safe = PROFILES.get("safe", PROFILES["normal"])
 
@@ -371,12 +386,15 @@ class AntiDetect:
                 # 钳制：不低于 0，不超过 SAFE 值 × 1.2
                 max_val = safe.get(key, base) * 1.2
                 new_val = max(0.0, min(max_val, new_val))
+                self._profile_params[key] = new_val
                 setattr(self, f"_{key}", new_val)
 
         # pause_probability 特殊处理（概率不能超过 1.0）
         base_p = self._profile_params.get("pause_probability", 0.08)
         new_p = base_p * (1 + random.uniform(-amp, amp))
-        self._pause_probability = max(0.0, min(1.0, new_p))
+        new_p = max(0.0, min(1.0, new_p))
+        self._profile_params["pause_probability"] = new_p
+        self._pause_probability = new_p
 
     # ── 事件 ─────────────────────────────────────────────────
 

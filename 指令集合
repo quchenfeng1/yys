@@ -1,0 +1,4 @@
+
+#测试指令#
+cd ~/quproject1/yys/新程序/主程序
+.venv/bin/python tools/verify_no_assets.py

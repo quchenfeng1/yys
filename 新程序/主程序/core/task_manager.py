@@ -33,13 +33,21 @@ from typing import Any, Optional
 
 @dataclass
 class TaskMeta:
-    """任务元数据（§5.2）"""
+    """任务元数据（§5.2 + 设计书 §2 模块声明）"""
     filepath: str            # 文件绝对路径
     name: str                # 文件名（不含 .py，如 "soul_12"）
     display_name: str        # 显示名（如 "御魂12层"）
     description: str         # 功能描述
     category: str            # 分类（daily/permanent/event/special/common）
     module_name: str         # Python 模块名（如 "tasks.daily.soul_12"）
+    # ── 设计书 §2 模块级声明（UI 动态配置区依据） ──────────
+    task_type: str = "event_task"   # "battle" | "event_task"
+    uses_battle: bool = False       # → UI 显示战斗配置区
+    uses_team: bool = False         # → UI 显示阵容配置
+    uses_soul: bool = False         # → UI 显示御魂配置
+    uses_stamina: bool = False      # → UI 显示体力门槛
+    loop_count: int = 1             # 每轮循环次数
+    timeout: int = 300              # 任务总超时（秒）
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -135,10 +143,11 @@ class TaskManager:
 
     def _extract_meta(self, py_file: Path, category: str) -> TaskMeta | None:
         """
-        从 Python 文件提取元数据（§3.2）。
+        从 Python 文件提取元数据（§3.2 + 设计书 §4.3）。
 
-        使用 ast 安全解析，提取 display_name / description。
-        优先级：display_name 类属性 > description 类属性 > docstring 第一行。
+        使用 ast 安全解析，提取模块级声明（display_name/description/task_type/
+        uses_*/loop_count/timeout）与类属性 display_name/description。
+        优先级：模块级变量 > 类属性 > docstring 第一行。
         不执行也不导入 .py 文件。
         """
         name = py_file.stem  # 文件名不含 .py
@@ -148,17 +157,26 @@ class TaskManager:
         except (SyntaxError, OSError):
             return None
 
-        display_name = name
-        description = ""
-
-        # 提取模块级 docstring
+        # 模块级 docstring 第一行（fallback description）
+        docline = ""
         if (tree.body and isinstance(tree.body[0], ast.Expr)
                 and isinstance(tree.body[0].value, ast.Constant)
                 and isinstance(tree.body[0].value.value, str)):
             doc = tree.body[0].value.value.strip()
-            description = doc.split("\n")[0] if doc else ""
+            docline = doc.split("\n")[0] if doc else ""
 
-        # 遍历类定义，提取 display_name / description 属性
+        # 设计书 §2：模块级声明（模块顶层 Assign → Name）
+        mod_vals: dict[str, Any] = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and isinstance(node.value, ast.Constant):
+                        mod_vals[target.id] = node.value.value
+
+        display_name = str(mod_vals.get("display_name") or name)
+        description = str(mod_vals.get("description") or docline or display_name)
+
+        # 类属性 display_name/description（fallback，优先级低于模块级）
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for item in node.body:
@@ -166,9 +184,10 @@ class TaskManager:
                         for target in item.targets:
                             if isinstance(target, ast.Name):
                                 if target.id == "display_name" and isinstance(item.value, ast.Constant):
-                                    display_name = str(item.value.value)
+                                    if "display_name" not in mod_vals:
+                                        display_name = str(item.value.value)
                                 elif target.id == "description" and isinstance(item.value, ast.Constant):
-                                    if not description:
+                                    if "description" not in mod_vals and not description:
                                         description = str(item.value.value)
 
         # 构建模块名
@@ -183,6 +202,13 @@ class TaskManager:
             description=description or display_name or name,
             category=category,
             module_name=module_name,
+            task_type=str(mod_vals.get("task_type", "event_task")),
+            uses_battle=bool(mod_vals.get("uses_battle", False)),
+            uses_team=bool(mod_vals.get("uses_team", False)),
+            uses_soul=bool(mod_vals.get("uses_soul", False)),
+            uses_stamina=bool(mod_vals.get("uses_stamina", False)),
+            loop_count=int(mod_vals.get("loop_count", 1) or 1),
+            timeout=int(mod_vals.get("timeout", 300) or 300),
         )
 
     # ── 查询（从缓存读取）─────────────────────────────────
@@ -201,6 +227,18 @@ class TaskManager:
                 if m.category in self._scan_dirs
             ]
 
+    def get_meta(self, name: str) -> TaskMeta | None:
+        """按文件名获取任务元数据（§5.3，从缓存读取）"""
+        if not self._cache:
+            self.scan_all()
+        with self._cache_lock:
+            return self._cache.get(name)
+
+    @property
+    def all_tasks(self) -> list[TaskMeta]:
+        """说明书 §2.2 要求的只读属性"""
+        return self.get_all_tasks()
+
     def get_tasks_by_category(self, category: str) -> list[TaskMeta]:
         """按分类获取任务列表（§5.3）"""
         return [m for m in self.get_all_tasks() if m.category == category]
@@ -211,6 +249,11 @@ class TaskManager:
             self.scan_all()
         with self._cache_lock:
             return [m for m in self._cache.values() if m.category == "common"]
+
+    @property
+    def generic_modules(self) -> list[TaskMeta]:
+        """说明书 §2.2 要求的只读属性"""
+        return self.get_generic_modules()
 
     def find_by_name(self, name: str) -> TaskMeta | None:
         """按文件名查找任务（§5.3）"""
@@ -280,6 +323,7 @@ from typing import Any
 
 from core.exceptions import TaskSkip
 from tasks.base.base_task import BaseTask
+from tasks.base.task_graph import TaskGraph
 from tasks.base.task_result import TaskResult, TaskStatus
 
 
@@ -290,19 +334,16 @@ class {class_name}(BaseTask):
     display_name = "{display_name}"
     description = "{display_name}"
 
-    def _build_graph(self):
-        from tasks.base.task_graph import TaskGraph
+    def _build_graph(self) -> TaskGraph:
+        """声明步骤图（§5.3）"""
         graph = TaskGraph()
-        # TODO: 添加任务步骤
+        # TODO: 添加任务步骤，如:
+        # from tasks.common.some_step import SomeStep
+        # graph.add_step("step1", SomeStep())
+        # graph.set_entry("step1")
         return graph
 
-    def execute(self, context=None) -> TaskResult:
-        # TODO: 实现任务逻辑
-        return TaskResult(
-            task_id=self.task_id,
-            status=TaskStatus.SUCCESS,
-            reason="{display_name} 执行完成",
-        )
+    # execute() 继承 BaseTask 的默认实现，自动调用 _build_graph().run(context)
 '''
         filepath.write_text(skeleton, encoding="utf-8")
 
@@ -359,14 +400,22 @@ class {class_name}(BaseTask):
         遍历 tasks/ 下所有 .py 文件，正则匹配 click_image("xxx") 等
         模板引用名。与 assets/ 目录对比，返回缺失的素材名列表。
 
+        改进：
+        - 跳过注释行（行首 # 或行内 # 后的内容），避免注释里的引用误报
+        - 规范化路径匹配：引用完整路径（如 common/ui/close_btn）与
+          assets 相对路径或文件名 stem 均可匹配
+
         调用方（UI 层）自行决定是否发布 assets_missing 事件。
         """
-        # 收集 assets 目录中所有模板名（不含扩展名）
-        existing_assets: set[str] = set()
+        # 收集 assets 目录中所有模板（相对路径不含扩展名 + 文件名 stem）
+        existing_paths: set[str] = set()
+        existing_stems: set[str] = set()
         if self._assets_dir.exists():
             for ext in ("*.png", "*.jpg", "*.jpeg", "*.bmp"):
                 for f in self._assets_dir.rglob(ext):
-                    existing_assets.add(f.stem)
+                    rel = f.relative_to(self._assets_dir).with_suffix("")
+                    existing_paths.add(str(rel).replace("\\", "/"))
+                    existing_stems.add(f.stem)
 
         # 正则匹配常见的模板引用模式
         patterns = [
@@ -386,8 +435,19 @@ class {class_name}(BaseTask):
                 continue
             try:
                 source = py_file.read_text(encoding="utf-8")
+                # 逐行处理并剔除注释（行首 # 或行内 # 之后的内容）
+                code_lines = []
+                for line in source.split("\n"):
+                    stripped = line.lstrip()
+                    if stripped.startswith("#"):
+                        continue
+                    # 截断行内注释（# 前后有空格）
+                    hash_idx = line.find(" #")
+                    code_lines.append(line[:hash_idx] if hash_idx >= 0 else line)
+                clean_source = "\n".join(code_lines)
+
                 for pat in patterns:
-                    for match in re.finditer(pat, source):
+                    for match in re.finditer(pat, clean_source):
                         if pat.startswith("wait_any") or pat.startswith("detect_scene"):
                             # 处理列表参数
                             inner = match.group(1)
@@ -399,7 +459,16 @@ class {class_name}(BaseTask):
                 continue
 
         # 找出引用但 assets 目录中不存在的
-        missing = [name for name in sorted(referenced) if name not in existing_assets]
+        # 匹配规则：引用完整路径命中 或 引用路径末尾组件命中素材文件名
+        def _is_missing(ref: str) -> bool:
+            if ref in existing_paths:
+                return False
+            last = ref.split("/")[-1]
+            if last in existing_stems:
+                return False
+            return True
+
+        missing = [name for name in sorted(referenced) if _is_missing(name)]
         return missing
 
     # ═══════════════════════════════════════════════════════════

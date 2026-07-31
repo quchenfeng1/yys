@@ -32,9 +32,22 @@ class LogPanel(QWidget):
 
         layout.addWidget(self.tabs)
 
-    def append_log(self, message: str) -> None:
-        """追加日志"""
-        self.log_view.appendPlainText(message)
+    def append_log(self, message: str | None = None, **kw: str) -> None:
+        """
+        追加日志（兼容 **kw 和 str 两种调用方式）。
+
+        支持 MainWindow 的调用方式:
+          append_log(**kw)  — kw 含 level/message/key
+          append_log(message="xxx") — 关键字
+          append_log("xxx") — 位置参数
+        """
+        if message is None:
+            message = kw.get("message") or kw.get("key", "")
+        if not message:
+            return
+        level = kw.get("level", "INFO")
+        formatted = f"[{level}] {message}" if level else message
+        self.log_view.appendPlainText(formatted)
         # 自动滚动到底部
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())

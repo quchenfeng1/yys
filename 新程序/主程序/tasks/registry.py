@@ -18,7 +18,12 @@ from tasks.base.base_task import BaseTask
 def discover_tasks(package: str | None = None) -> dict[str, Type[BaseTask]]:
     """
     独立函数：扫描 tasks/ 下所有子目录的 .py 文件，
-    排除 __init__.py 和 base/、common/，自动注册 BaseTask 子类。
+    排除 __init__.py 和 base/、common/，自动注册任务类。
+
+    兼容两类入口：
+      - BaseTask 子类（标准入口，key=task_id）
+      - TaskStep 子类且声明 display_name（设计书入口，key=name）
+        特化步骤（无 display_name）不会被注册为任务。
 
     Args:
         package: 扫描的包路径（默认扫描 tasks 下各分类目录）
@@ -26,6 +31,7 @@ def discover_tasks(package: str | None = None) -> dict[str, Type[BaseTask]]:
     Returns:
         {task_id: task_class} 映射
     """
+    from tasks.base.task_step import TaskStep
     discovered: dict[str, Type[BaseTask]] = {}
 
     if package:
@@ -43,13 +49,17 @@ def discover_tasks(package: str | None = None) -> dict[str, Type[BaseTask]]:
         try:
             mod = importlib.import_module(module_name)
             for name, obj in inspect.getmembers(mod):
-                if (
-                    inspect.isclass(obj)
-                    and issubclass(obj, BaseTask)
-                    and obj is not BaseTask
-                    and not inspect.isabstract(obj)
-                ):
+                if not inspect.isclass(obj) or inspect.isabstract(obj):
+                    continue
+                if issubclass(obj, BaseTask) and obj is not BaseTask:
+                    # 标准入口：BaseTask 子类
                     task_id = getattr(obj, "task_id", None) or name
+                    discovered[task_id] = obj
+                elif (issubclass(obj, TaskStep) and obj is not TaskStep
+                      and hasattr(obj, "display_name")):
+                    # 设计书入口：TaskStep 子类 + display_name
+                    # （特化步骤无 display_name，不会被误注册为任务）
+                    task_id = getattr(obj, "name", None) or name
                     discovered[task_id] = obj
         except Exception:
             pass
@@ -81,15 +91,25 @@ class TaskRegistry:
         self._scanned = False
         self._config = config
         self._event_bus = event_bus
+        self._bus = self._event_bus  # 兼容别名
         self._state_mgr = state_manager
+        self._state_manager = state_manager  # 说明书 §2.1 要求名
 
     # ── 注册 ──────────────────────────────────────────────────
 
     def register(self, task_class: Type[BaseTask]) -> None:
-        """手动注册（§5.3）"""
-        if not issubclass(task_class, BaseTask):
-            raise TypeError(f"{task_class} 不是 BaseTask 的子类")
-        task_id = getattr(task_class, 'task_id', None) or task_class.__name__
+        """手动注册（§5.3），兼容 BaseTask 与设计书 TaskStep 入口类"""
+        from tasks.base.task_step import TaskStep
+        if issubclass(task_class, BaseTask) and task_class is not BaseTask:
+            task_id = getattr(task_class, 'task_id', None) or task_class.__name__
+        elif (issubclass(task_class, TaskStep) and task_class is not TaskStep
+              and hasattr(task_class, 'display_name')):
+            task_id = getattr(task_class, 'name', None) or task_class.__name__
+        else:
+            raise TypeError(
+                f"{task_class} 不是可注册的任务类"
+                "（BaseTask 子类，或声明了 display_name 的 TaskStep 子类）"
+            )
         self._registry[task_id] = task_class
         category = getattr(task_class, 'category', 'common')
         self._categories.setdefault(category, []).append(task_id)

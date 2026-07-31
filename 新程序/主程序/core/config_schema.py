@@ -85,6 +85,7 @@ class DeviceConfig:
     screenshot: ScreenshotConfig = field(default_factory=ScreenshotConfig)
     emulator_path: str = ""
     emulator_name: str = ""
+    mock: bool = False  # 模拟设备模式（无真实模拟器调试用）
 
 
 @dataclass
@@ -134,9 +135,10 @@ class TaskActivityEntry:
 
 @dataclass
 class TaskEntry:
-    """任务条目"""
+    """任务条目（tasks.yaml §5.1 设计书字段）"""
     id: str = ""
     name: str = ""
+    display_name: str = ""
     category: str = "common"  # common | daily | event | permanent | special
     enabled: bool = True
     priority: int = 0
@@ -145,6 +147,20 @@ class TaskEntry:
     interval: float = 0.0  # 执行间隔（秒），0=不重复
     tags: list[str] = field(default_factory=list)
     params: dict[str, Any] = field(default_factory=dict)
+
+    # ── 设计书调度字段（§5.1，scheduler 读取） ──────────────
+    repeat: dict | None = None          # {type, value, weekday, window, expire_at, loop_count, monthly_day}（含 on_enter 启动类型）
+    execution_mode: str = "daily"       # 执行模式：daily=按天执行一次 / per_slot=每时间段各执行一次
+    max_daily: int | None = None        # 每日最大执行次数（可选）
+    max_fail_streak: int = 10           # 连续失败熔断阈值
+    active_range: list[str] | None = None  # ["2026-07-20", "2026-08-20"]
+    time_start: str | None = None       # "08:00"（单时段；与 time_slots 互斥）
+    time_end: str | None = None         # "23:00"（单时段；与 time_slots 互斥）
+    time_slots: list[list[str]] | None = None  # 多时段 [["10:00","12:00"],["12:00","14:00"]]，2+ 时段时优先于 time_start/time_end
+    team_id: str | None = None          # 阵容 ID
+    floor: int | None = None            # 副本层数
+    total_count: int | None = None      # 累计执行次数上限（活动期累计）
+    loop_count: int | None = None       # 每轮循环次数（BattleLoop 内战斗次数）
 
 
 @dataclass
@@ -258,11 +274,21 @@ MIGRATIONS: dict[int, callable] = {}
 def _dict_to_dataclass(cls: type, data: dict[str, Any]) -> Any:
     """将 dict 递归转换为 dataclass（简易实现，仅处理嵌套 dataclass）"""
     import dataclasses
+    import typing
 
     if not dataclasses.is_dataclass(cls):
         return data
 
-    field_types = {f.name: f.type for f in dataclasses.fields(cls)}
+    # from __future__ import annotations 下字段类型是字符串，
+    # 需用 get_type_hints 解析为真实类型才能递归转换嵌套 dataclass
+    try:
+        hints = typing.get_type_hints(cls)
+    except Exception:
+        hints = {}
+    field_types: dict[str, Any] = {}
+    for f in dataclasses.fields(cls):
+        field_types[f.name] = hints.get(f.name, f.type)
+
     kwargs: dict[str, Any] = {}
 
     for f_name, f_type in field_types.items():

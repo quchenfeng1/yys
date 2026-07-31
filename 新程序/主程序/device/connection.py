@@ -45,9 +45,11 @@ class ConnectionManager:
         max_retries: int = 5,
     ):
         self._adb = adb_client or ADBClient()
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._config = config
-        self._state_mgr = state_manager
+        self._state_manager = state_manager
+        self._state_mgr = self._state_manager  # 兼容别名
         self._lock = threading.Lock()
         self._pool_lock = threading.Lock()
         self._connected = False
@@ -87,6 +89,9 @@ class ConnectionManager:
         # 重连线程引用
         self._reconnect_thread: threading.Thread | None = None
         self._reconnect_stop = threading.Event()
+
+        # 心跳管理器引用
+        self._heartbeat: HeartbeatMonitor | None = None
 
     # ── 连接 ──────────────────────────────────────────────────
 
@@ -143,6 +148,9 @@ class ConnectionManager:
                 self._bus.publish(Events.CONNECTION_LOST, source="connection", serial=device_id)
                 return
 
+            # 断开前先停止心跳
+            self.stop_heartbeat()
+
             self._connected = False
             self._connection_status = ConnectionState.DISCONNECTED
             self._conn_pause_event.clear()
@@ -173,6 +181,11 @@ class ConnectionManager:
     @property
     def active_device_id(self) -> str | None:
         return self._current_serial
+
+    @property
+    def active_device(self) -> ADBClient | None:
+        """当前活动的 ADBClient 实例（对应说明书 _active_device）"""
+        return self._adb
 
     @property
     def current_serial(self) -> str | None:
@@ -209,13 +222,22 @@ class ConnectionManager:
 
     def _check_health_and_reconnect(self) -> None:
         """健康度低于 50 时主动触发重连"""
-        if self._connected and self._calculate_health_score() < 50:
+        score = self._calculate_health_score()
+        if self._connected and score < 50:
             self._connection_status = ConnectionState.RECONNECTING
+            # 计算实际平均延迟
+            total_samples = 0
+            total_latency = 0.0
+            for op_name, dq in self._quality_records.items():
+                if dq:
+                    total_latency += sum(dq)
+                    total_samples += len(dq)
+            avg_latency = total_latency / total_samples if total_samples > 0 else 0.0
             self._bus.publish(Events.CONNECTION_QUALITY_WARNING,
                              source="connection",
                              operation="health",
-                             avg_latency_ms=self._calculate_health_score(),
-                             sample_count=100)
+                             avg_latency_ms=avg_latency,
+                             sample_count=total_samples)
             self._start_reconnect_thread()
 
     def get_device_info(self) -> dict[str, str]:
@@ -236,6 +258,9 @@ class ConnectionManager:
     def switch_device(self, device_id: str) -> bool:
         """切换操作目标设备（受 _pool_lock 保护）"""
         with self._pool_lock:
+            # 保存当前设备 ID
+            prev_device = self._current_serial
+
             if device_id in self._device_pool:
                 self._adb = self._device_pool[device_id]
                 self._current_serial = device_id
@@ -430,6 +455,14 @@ class ConnectionManager:
 
         raise DeviceScreenshotError(f"截图失败(已重试): {last_error}")
 
+    def _log(self, level: str, message: str) -> None:
+        """模块级日志：发布 LOG_RECORD（UI 日志面板可见），兜底 print"""
+        try:
+            self._bus.publish(Events.LOG_RECORD, source="connection", level=level,
+                              message=message)
+        except Exception:
+            print(f"[{level}] {message}")
+
     def click(self, x: int, y: int) -> None:
         """点击坐标。先检查暂停事件，获取锁读设备，释放锁后执行。"""
         self._wait_for_resume()
@@ -446,6 +479,7 @@ class ConnectionManager:
         elapsed = (_time.time() - start) * 1000
         self._record_quality("click", elapsed)
         self._check_health_and_reconnect()
+        self._log("info", f"[01-设备连接] 点击坐标: ({x}, {y}) 耗时 {elapsed:.0f}ms")
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         """滑动操作（duration_ms 毫秒）"""
@@ -463,6 +497,7 @@ class ConnectionManager:
         elapsed = (_time.time() - start) * 1000
         self._record_quality("swipe", elapsed)
         self._check_health_and_reconnect()
+        self._log("info", f"[01-设备连接] 滑动: ({x1},{y1})→({x2},{y2}) 耗时 {elapsed:.0f}ms")
 
     def input_key(self, key: str) -> None:
         """模拟按键输入"""
@@ -497,7 +532,11 @@ class ConnectionManager:
         return self._adb.am_start(package, activity)
 
     def is_app_foreground(self, package: str) -> str:
-        """判断 App 运行状态。返回 FOREGROUND / BACKGROUND / NOT_RUNNING"""
+        """判断 App 运行状态。返回 FOREGROUND / BACKGROUND / NOT_RUNNING
+
+        优先使用 dumpsys activity 解析前台包名；
+        若 dumpsys 格式不匹配则回退 pidof（此时仅能区分存活与否，将存活状态标记为 BACKGROUND）。
+        """
         try:
             fg = self._adb.foreground_package()
             if fg and package in fg:
@@ -507,7 +546,7 @@ class ConnectionManager:
             try:
                 result = self._adb.run(["shell", "pidof", package], timeout=5.0)
                 if result.stdout.strip():
-                    return "RUNNING"
+                    return "BACKGROUND"
             except Exception:
                 pass
             return "NOT_RUNNING"
@@ -515,6 +554,18 @@ class ConnectionManager:
     def echo(self) -> bool:
         """检测设备是否在线（adb shell echo ok, timeout=5s）"""
         return self._adb.echo()
+
+    # ── 公共暂停/恢复 API（供 HeartbeatMonitor 调用） ──────────
+
+    def pause_operations(self) -> None:
+        """暂停所有设备操作（重连期间调用）。清除 _conn_pause_event 阻止操作。"""
+        self._conn_pause_event.clear()
+
+    def resume_operations(self) -> None:
+        """恢复所有设备操作。设置 _conn_pause_event 允许操作继续。"""
+        self._conn_pause_event.set()
+
+    # ── 心跳 ──────────────────────────────────────────────────
 
     def start_heartbeat(self, interval: float = 30.0) -> None:
         """启动心跳检测线程（守护线程）"""
@@ -524,7 +575,7 @@ class ConnectionManager:
 
     def stop_heartbeat(self) -> None:
         """停止心跳检测。join(timeout=5)，超时后记录警告"""
-        if hasattr(self, '_heartbeat') and self._heartbeat:
+        if self._heartbeat:
             self._heartbeat.stop()
             # 如有活跃的重连线程，一并停止
             if self._reconnect_thread and self._reconnect_thread.is_alive():

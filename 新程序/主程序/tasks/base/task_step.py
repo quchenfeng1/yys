@@ -18,13 +18,24 @@ class TaskStep(ABC):
 
     def __init__(
         self,
-        step_id: str,
-        is_generic: bool = False,
-        retry_count: int = 0,
-        timeout: float = 120.0,
+        step_id: str | None = None,
+        is_generic: bool | None = None,
+        retry_count: int | None = None,
+        timeout: float | None = None,
         **kwargs: Any,
     ):
+        # 设计书兼容：step_id 省略时取子类类属性 name（如 EnterDungeon.name）
+        cls = type(self)
+        if step_id is None:
+            step_id = getattr(cls, 'name', None) or cls.__name__
+        if is_generic is None:
+            is_generic = getattr(cls, 'is_generic', False)
+        if retry_count is None:
+            retry_count = getattr(cls, 'retry_count', 0)
+        if timeout is None:
+            timeout = getattr(cls, 'timeout', 120.0)
         self.step_id = step_id
+        self.name = step_id  # 说明书 §2.3 要求 name 属性
         self.is_generic = is_generic  # §2.3 是否通用模块
         self.retry_count = retry_count  # §2.3 失败重试次数
         self.timeout = timeout  # §2.3 单步超时秒数

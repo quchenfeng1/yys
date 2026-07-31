@@ -23,8 +23,11 @@ class AccountBridge:
         """切换当前操作账号（§5.3）"""
         if not self._mgr:
             return False
-        self._mgr.switch_to(account_id)
-        return True
+        try:
+            self._mgr.switch_to(account_id)
+            return True
+        except Exception:
+            return False
 
     def get_all_accounts(self) -> list[Any]:
         """获取全部账号列表（§5.3）"""

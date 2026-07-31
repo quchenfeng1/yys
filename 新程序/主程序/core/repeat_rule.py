@@ -4,7 +4,7 @@
 RepeatRule 重复规则（dataclass + helper）。
 对应设计书 §5.2 RepeatConfig / §5.3 RepeatRule 方法定义。
 
-支持 8 种重复类型:
+支持 10 种重复类型:
 - once: 单次执行（calc_next_run 返回 datetime.max）
 - daily: 每天固定 time_start
 - weekly: 每周固定 weekday
@@ -13,6 +13,8 @@ RepeatRule 重复规则（dataclass + helper）。
 - interval_hours: 每 N 小时
 - expire_at: 执行到指定日期后不再调度
 - special: 特殊规则（同 daily，受 window.date 限制）
+- on_enter: 每次运行启动后执行一次（load_state 时重置 next_run=now，执行后本轮完成）
+- trigger: 特殊条件触发（无时间推进，无初始 next_run；由外部触发——TriggerWatcher 识图命中/手动 update_next_run——置为到期；执行后本轮完成）
 
 所有时间基于 UTC+8（TZ_UTC8）。
 """
@@ -42,6 +44,7 @@ class RepeatRule:
     type: str = "daily"
     interval: int = 1
     time: str = "06:00"
+    time_end: str = ""  # 每日结束时间 "HH:MM"（可选，用于窗口判断）
     weekdays: list[int] | None = None
     expire_date: str = ""
     monthly_day: int = 1
@@ -55,12 +58,30 @@ class RepeatRule:
     def get_initial_next_run(self, from_time: datetime | None = None) -> datetime:
         """
         首次注册时计算初始 next_run_time（宽容解析）。
-        若当前已过当日 time_start，则取下一个有效时间点。
+
+        窗口修正（§3.1 三重判据补充）：
+        - 若当前时刻已达到 time_start 且未超过 time_end（若有），
+          则直接返回当前时刻（立即可执行）——避免配置在窗口内时
+          被错误推到明天/下周。
+        - 否则取下一个有效时间点。
         """
         now = (from_time or datetime.now(TZ_UTC8)).astimezone(TZ_UTC8)
 
-        if self.type == "once":
+        # 窗口内 → 立即可执行
+        if self.type in ("daily", "monthly_start", "special"):
+            if self._initial_now_ok(now):
+                return now
+        elif self.type == "weekly":
+            if (not self.weekdays or now.weekday() in self.weekdays) and self._initial_now_ok(now):
+                return now
+
+        if self.type in ("on_enter", "once"):
             return now
+
+        elif self.type == "trigger":
+            # 触发式任务：不产生初始 next_run（等待外部触发），
+            # 返回 datetime.max 表示"不按时间调度"（由 Scheduler 层拦截为 None）
+            return datetime.max.replace(tzinfo=TZ_UTC8)
 
         elif self.type == "daily":
             return self._next_daily(now)
@@ -88,6 +109,28 @@ class RepeatRule:
         # special / fallback
         return self._next_daily(now)
 
+    def _initial_now_ok(self, now: datetime) -> bool:
+        """
+        当前时刻是否已在可执行窗口内。
+
+        - 未到 time_start → False（应等到 time_start）
+        - 已过 time_end（若配置）→ False（今日窗口已过，推明天）
+        - 其余（含无 time_end 且已过 time_start）→ True（立即可执行）
+        """
+        parts = self.time.split(":")
+        h = int(parts[0]) if parts else 6
+        m = int(parts[1]) if len(parts) > 1 else 0
+        cur = now.hour * 60 + now.minute
+        if cur < h * 60 + m:
+            return False
+        if self.time_end:
+            parts2 = self.time_end.split(":")
+            h2 = int(parts2[0]) if parts2 else 0
+            m2 = int(parts2[1]) if len(parts2) > 1 else 0
+            if cur > h2 * 60 + m2:
+                return False
+        return True
+
     # ── 推进计算（§5.3 calc_next_run）──────────────────────
 
     def calc_next_run(self, last_run: datetime) -> datetime:
@@ -99,11 +142,16 @@ class RepeatRule:
         weekly 若已过本周匹配日 → 下周
         interval 跨越窗口边界时自动调整
         """
-        if self.type == "once":
+        if self.type in ("on_enter", "once"):
+            return datetime.max.replace(tzinfo=TZ_UTC8)
+
+        elif self.type == "trigger":
+            # 触发式任务：执行后不推进时间（由 Scheduler 标记 completed + 清空 next_run）
             return datetime.max.replace(tzinfo=TZ_UTC8)
 
         elif self.type == "daily":
-            return self._next_daily(last_run + timedelta(days=1))
+            # _next_daily 内部保证结果 > last_run（时间相等/已过 → 次日）
+            return self._next_daily(last_run)
 
         elif self.type == "weekly":
             return self._next_weekly(last_run + timedelta(days=1))
@@ -126,7 +174,7 @@ class RepeatRule:
             return self._ensure_future(last_run + timedelta(hours=1))
 
         # special
-        return self._next_daily(last_run + timedelta(days=1))
+        return self._next_daily(last_run)
 
     # ── 过期判断（§5.3 is_expired）────────────────────────
 
@@ -135,6 +183,8 @@ class RepeatRule:
         now = (now or datetime.now(TZ_UTC8)).astimezone(TZ_UTC8)
         if self.type == "once":
             return True
+        if self.type == "trigger":
+            return False  # 触发式任务不过期，等待外部触发
         if self.type == "expire_at" and self.expire_date:
             expire = datetime.strptime(f"{self.expire_date} 23:59:59", "%Y-%m-%d %H:%M:%S")
             expire = expire.replace(tzinfo=TZ_UTC8)

@@ -1,1 +1,14 @@
-# 调度状态持久化（自动生成）
+{
+  "daily_test": {
+    "task_name": "daily_test",
+    "next_run_time": "2026-08-01T06:00:00+08:00",
+    "today_count": 3,
+    "total_count": 3,
+    "window_start": "",
+    "fail_streak": 0,
+    "last_done": "",
+    "last_status": "",
+    "skip_reason": "",
+    "updated": "2026-07-31T16:37:27.789922+08:00"
+  }
+}

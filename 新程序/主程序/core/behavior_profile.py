@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from core.anti_detect import PROFILES as ANTI_DETECT_PROFILES
 from core.exceptions import ProfileNotFoundError
 
 
@@ -40,13 +41,8 @@ class BehaviorStats:
     total_actions: int = 0
 
 
-# 四档预设（与 anti_detect.py 一致）
-PROFILES: dict[str, dict[str, float]] = {
-    "safe": {"offset_radius": 15, "jitter_range": 1.0, "pause_probability": 0.15, "drift_amplitude": 0.15},
-    "normal": {"offset_radius": 10, "jitter_range": 0.5, "pause_probability": 0.08, "drift_amplitude": 0.15},
-    "fast": {"offset_radius": 5, "jitter_range": 0.2, "pause_probability": 0.03, "drift_amplitude": 0.10},
-    "debug": {"offset_radius": 0, "jitter_range": 0.0, "pause_probability": 0.0, "drift_amplitude": 0.0},
-}
+# 从 anti_detect.py 导入 PROFILES，保持单一数据源
+PROFILES = ANTI_DETECT_PROFILES
 
 
 class BehaviorProfile:
@@ -72,9 +68,12 @@ class BehaviorProfile:
         根据档案名加载预设参数。
         支持 "safe"/"normal"/"fast"/"debug"。
         配合 global.anti_detect 中的自定义覆盖。
+        无效档案名回退到 NORMAL 并记录警告。
         """
         if profile_name not in PROFILES:
-            raise ProfileNotFoundError(f"行为档案不存在: {profile_name}")
+            import logging
+            logging.warning(f"行为档案不存在: {profile_name}，回退到 normal")
+            profile_name = "normal"
 
         params = dict(PROFILES[profile_name])
 

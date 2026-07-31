@@ -50,7 +50,8 @@ class OcrLocator:
         self._lang = lang
         self._use_gpu = use_gpu
         self._timeout = timeout
-        self._lock = threading.Lock()
+        self._init_lock = threading.Lock()
+        self._lock = self._init_lock  # 兼容别名
         self._ocr_lock = threading.Lock()
         self._engine: Any = None
         self._initialized = False
@@ -66,11 +67,11 @@ class OcrLocator:
     # ── 初始化 ────────────────────────────────────────────────
 
     def initialize(self) -> bool:
-        """初始化 OCR 引擎"""
+        """初始化 OCR 引擎（双重检查锁）"""
         if self._initialized:
             return True
 
-        with self._lock:
+        with self._init_lock:
             if self._initialized:
                 return True
 
@@ -365,8 +366,7 @@ class OcrLocator:
 
     def close(self) -> None:
         """释放 OCR 引擎资源"""
-        with self._lock:
+        with self._init_lock:
             self._engine = None
             self._initialized = False
             self._ready = False
-            self._initialized = False

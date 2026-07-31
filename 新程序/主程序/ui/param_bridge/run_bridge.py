@@ -40,6 +40,25 @@ class RunBridge:
 
     # ── 兼容旧名（直接调用旧版 RunController）─────────────
 
+    def set_controller(self, controller: Any) -> None:
+        """注入 RunController 实例（供 UI 查询当前任务/队列）"""
+        self._ctrl = controller
+
+    def get_current_task(self) -> str | None:
+        """当前正在执行的任务名"""
+        if self._ctrl:
+            return getattr(self._ctrl, 'current_task', None)
+        return None
+
+    def get_queue_snapshot(self) -> list[str]:
+        """待执行队列内容"""
+        if self._ctrl and hasattr(self._ctrl, 'queue_snapshot'):
+            try:
+                return list(self._ctrl.queue_snapshot)
+            except Exception:
+                pass
+        return []
+
     def start(self) -> None:
         if self._ctrl:
             self._ctrl.start()

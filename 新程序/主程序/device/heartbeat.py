@@ -62,7 +62,7 @@ class HeartbeatMonitor:
         """心跳检测主循环"""
         while self._running:
             try:
-                if self._conn.is_connected:
+                if self._conn.is_connected():
                     # 使用 echo 检测（adb shell echo ok, timeout=5s）
                     ok = self._conn.echo()
                     if ok:
@@ -74,6 +74,8 @@ class HeartbeatMonitor:
 
             except Exception:
                 self._fail_count += 1
+                # 异常也视为断线，立即暂停操作
+                self._on_disconnect()
 
             # 连续失败告警
             if self._fail_count >= self._max_fails:
@@ -83,14 +85,14 @@ class HeartbeatMonitor:
                     error=f"心跳连续失败 {self._fail_count} 次",
                 )
                 # 设置连接暂停事件（阻止设备操作）
-                self._conn._conn_pause_event.clear()
+                self._conn.pause_operations()
 
             time.sleep(self._interval)
 
     def _on_disconnect(self) -> None:
         """检测到断线后的处理（只发布事件，不重连）"""
         self._bus.publish(Events.CONNECTION_LOST, source="heartbeat")
-        self._conn._conn_pause_event.clear()  # 暂停操作
+        self._conn.pause_operations()  # 暂停操作
 
     # ── 状态 ──────────────────────────────────────────────────
 

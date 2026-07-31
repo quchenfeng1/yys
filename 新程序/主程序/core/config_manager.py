@@ -76,7 +76,8 @@ class ConfigManager:
         monitor: Any = None,
     ):
         self._config_dir = Path(config_dir)
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._monitor = monitor  # §2.1 日志监控中心（可选）
         self._lock = threading.Lock()
         self._hot_reload_enabled = enable_hot_reload
@@ -273,20 +274,19 @@ class ConfigManager:
 
     # ── 保存（§5.3 set 内部调用）────────────────────────────
 
+    def _save_section(self, section: str, data: dict[str, Any]) -> None:
+        """原子保存指定配置段（§4.3）"""
+        self._atomic_save(section, data)
+        self._bus.publish(Events.CONFIG_CHANGED, source=section)
+
     def save_global(self, data: dict[str, Any] | None = None) -> None:
-        path = self._config_dir / "global.yaml"
-        _yaml_dump(path, data or self._raw_global)
-        self._bus.publish(Events.CONFIG_CHANGED, source="global")
+        self._save_section("global", data or self._raw_global)
 
     def save_accounts(self, data: dict[str, Any] | None = None) -> None:
-        path = self._config_dir / "accounts.yaml"
-        _yaml_dump(path, data or self._raw_accounts)
-        self._bus.publish(Events.CONFIG_CHANGED, source="accounts")
+        self._save_section("accounts", data or self._raw_accounts)
 
     def save_tasks(self, data: dict[str, Any] | None = None) -> None:
-        path = self._config_dir / "tasks.yaml"
-        _yaml_dump(path, data or self._raw_tasks)
-        self._bus.publish(Events.CONFIG_CHANGED, source="tasks")
+        self._save_section("tasks", data or self._raw_tasks)
 
     # ═══════════════════════════════════════════════════════════
     #  校验（§4 + §5.3 validate）
@@ -355,7 +355,8 @@ class ConfigManager:
             if errors and self._monitor:
                 self._monitor.log("config", f"热重载校验告警: {'; '.join(errors)}")
 
-        self._bus.publish(Events.CONFIG_RELOADED)
+        # 按说明书要求发布 config.changed 事件（§5.3 reload）
+        self._bus.publish(Events.CONFIG_CHANGED, source="reload")
 
     # 兼容旧名
     reload_all = reload
@@ -550,12 +551,22 @@ class ConfigManager:
                 return default
 
             else:
-                # 非标准段 → 三级覆盖查找所有
+                # 非标准段 → 三级覆盖查找所有 + coords
                 for candidate in [self._raw_tasks, self._raw_accounts, self._raw_global]:
                     val = self._deep_get(candidate, parts)
                     if val is not None:
                         self._index_cache[cache_key] = val
                         return val
+                # 检查 _coords_cache（仅当 key 以 coords. 开头）
+                if section == "coords" and len(parts) >= 2:
+                    scene_name = parts[1]
+                    if scene_name in self._coords_cache:
+                        sub_parts = parts[2:]
+                        val = self._deep_get(self._coords_cache[scene_name], sub_parts)
+                        if val is not None:
+                            self._index_cache[cache_key] = val
+                            return val
+                        return default
                 return default
 
     def _three_level_get(self, parts: list[str]) -> Any:
@@ -591,6 +602,9 @@ class ConfigManager:
         持锁→按前缀定位文件→记录旧值→写临时文件→os.replace
         → 成功：更新 _cache → 失效 _index_cache 前缀 → 发布事件
         → 失败：不修改缓存 → 抛异常
+
+        写盘优先原则（§3.3 + §5.4）：先写盘、后更新缓存。
+        写盘操作前先在内存副本中修改，写盘失败时丢弃该副本（不触及缓存）。
         """
         with self._lock:
             parts = key_path.split(".")
@@ -598,31 +612,31 @@ class ConfigManager:
 
             if section == "global":
                 target = self._raw_global
-                save_fn = self.save_global
             elif section == "tasks":
                 target = self._raw_tasks
-                save_fn = self.save_tasks
             elif section == "accounts":
                 target = self._raw_accounts
-                save_fn = self.save_accounts
             else:
                 raise ConfigError(f"无法定位配置段: {section}（设计书§3.3）")
 
             old_value = self._deep_get(target, parts[1:])
 
-            # 写盘（先写盘、后更新缓存，§3.3 写盘优先原则）
-            self._deep_set(target, parts[1:], value)
+            # 在内存副本中修改（暂不触及 _cache）
+            import copy
+            new_target = copy.deepcopy(target)
+            self._deep_set(new_target, parts[1:], value)
+
+            # 先写盘（§3.3 写盘优先原则）
             try:
-                self._atomic_save(section, target)
+                self._atomic_save(section, new_target)
             except Exception:
-                # 写盘失败 → 恢复 _cache 到旧值
-                if old_value is not None:
-                    self._deep_set(target, parts[1:], old_value)
-                else:
-                    self._deep_delete(target, parts[1:])
+                # 写盘失败 → 丢弃内存副本，_cache 不变
                 raise
 
-            # 写盘成功 → 失效索引缓存（而非直接设置，保证下次 get() 走三级覆盖）
+            # 写盘成功 → 更新 _cache
+            self._deep_set(target, parts[1:], value)
+
+            # 失效索引缓存（保证下次 get() 走三级覆盖）
             self._invalidate_index_prefix(key_path)
 
         # 持锁外发布事件
@@ -694,6 +708,47 @@ class ConfigManager:
                 return merged
 
             return task_config
+
+    def update_task(self, name: str, **fields: Any) -> None:
+        """
+        更新 tasks.yaml 中指定任务条目（§5.3）。
+
+        与 get_task_config 读取结构一致（tasks: [{...}] 列表结构）。
+        fields 浅合并进条目；条目不存在则创建。
+        写盘优先：先原子写盘，失败不修改缓存。
+        """
+        import copy
+        with self._lock:
+            tasks_section = copy.deepcopy(self._raw_tasks or {})
+            tasks_list = tasks_section.setdefault("tasks", [])
+            if not isinstance(tasks_list, list):
+                tasks_list = []
+                tasks_section["tasks"] = tasks_list
+
+            found = None
+            for t in tasks_list:
+                if isinstance(t, dict) and (t.get("name") == name or t.get("id") == name):
+                    found = t
+                    break
+            if found is None:
+                found = {"name": name, "id": name}
+                tasks_list.append(found)
+
+            # 防止覆盖 name/id
+            clean = {k: v for k, v in fields.items() if k not in ("name", "id")}
+            found.update(clean)
+
+            # 写盘优先（§3.3）
+            self._atomic_save("tasks", tasks_section)
+            # 写盘成功 → 更新缓存
+            self._raw_tasks = tasks_section
+            # 重建 tasks_config 缓存，使 Scheduler 热重载能立即读到最新
+            try:
+                self._tasks = validate_tasks_config(tasks_section)
+            except Exception:
+                pass
+            self._invalidate_index_prefix("tasks")
+            self._bus.publish(Events.CONFIG_CHANGED, source="tasks", task_name=name)
 
     def get_coords(self, scene: str) -> dict[str, Any]:
         """读取场景坐标（§5.3）"""

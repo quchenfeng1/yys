@@ -30,7 +30,8 @@ class BaseTask(ABC):
     def __init__(self, task_id: str, **kwargs: Any):
         self.task_id = task_id
         self.params = kwargs
-        self._bus = get_global_bus()
+        self._event_bus = get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._start_time: float = 0.0
         self._interrupted = False
         self._context: Any = None  # TaskContext，由 run() 注入

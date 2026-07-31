@@ -74,14 +74,18 @@ class EmulatorDetector:
         system = platform.system()
         if system == "Darwin":
             # macOS: MuMu 模拟器路径
+            # 说明书：/Applications/MuMu.app/Contents/MacOS/tools/adb
             candidates = [
+                "/Applications/MuMu.app/Contents/MacOS/tools/adb",
                 "/Applications/MuMuPlayer.app/Contents/MacOS/adb",
                 "/Applications/MuMuPlayerPro.app/Contents/MacOS/adb",
                 "/usr/local/bin/adb",
                 "/opt/homebrew/bin/adb",
             ]
         elif system == "Windows":
+            # 说明书：C:\Program Files\MuMu\emulator\nemu\EmulatorShell\adb.exe
             candidates = [
+                "C:\\Program Files\\MuMu\\emulator\\nemu\\EmulatorShell\\adb.exe",
                 "C:\\Program Files\\MuMu\\emulator\\nemu\\adb.exe",
                 "C:\\Program Files\\BlueStacks\\HD-Player.exe",
             ]

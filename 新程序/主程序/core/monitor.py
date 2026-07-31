@@ -106,7 +106,8 @@ class Monitor:
         notify_callback: Callable[[str, str], None] | None = None,
         max_log_queue: int = 5000,
     ):
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._config = config       # §2.1 ConfigManager
         self._connection = connection  # §2.1 ConnectionManager
         self._state_mgr: Any = None    # §2.1 StateManager（构造函数或 set_state_manager 注入）
@@ -126,7 +127,8 @@ class Monitor:
         self._logger = LoggerEngine()
         self._metrics = MetricsCollector()
         self._snapshot_mgr = SnapshotManager(snapshot_dir=snapshot_dir, event_bus=self._bus)
-        self._report_gen = ReportGenerator()
+        # 传入真实的 metrics，确保报告有实际数据（§3.4）
+        self._report_gen = ReportGenerator(metrics=self._metrics)
 
         # 结构化日志目录
         self._structured_dir = Path(structured_log_dir)
@@ -400,7 +402,7 @@ class Monitor:
             "timestamp": datetime.now().isoformat(),
             "screenshot": path or "",
         }
-        ctx_dir = Path(self._snapshot_mgr._dir) / "context"
+        ctx_dir = Path(self._snapshot_mgr.directory) / "context"
         ctx_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ctx_file = ctx_dir / f"{task}_{step}_{ts}.json"

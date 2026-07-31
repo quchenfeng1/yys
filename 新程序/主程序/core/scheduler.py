@@ -49,13 +49,15 @@ TZ_UTC8: tzinfo = timezone(timedelta(hours=8), "UTC+8")
 @dataclass
 class RepeatConfig:
     """重复规则配置（§5.2 RepeatConfig）"""
-    type: str = "daily"  # once/daily/weekly/monthly_start/interval_days/interval_hours/expire_at/special
-    value: int | None = None  # interval_days=N / weekly weekday
+    type: str = "daily"  # once/daily/weekly/monthly_start/interval_days/interval_hours/expire_at/special/on_enter/trigger
+    value: int | None = None  # interval_days=N / interval_hours=N
     weekday: int | None = None  # weekly 专属 0=周一~6=周日
     window: dict | None = None  # special 专属 {date, start, end}
     expire_at: str | None = None  # expire_at 专属到期日期
     loop_count: int | None = None  # 战斗循环次数
     monthly_day: int = 1  # monthly_start 专属
+    total_count: int | None = None  # 累计执行次数上限（活动期累计，None=不限）
+    trigger_templates: list[str] | None = None  # trigger 专属：触发模板识别列表（02-TriggerWatcher 监控）
 
 
 @dataclass
@@ -67,13 +69,16 @@ class TaskConfig:
     category: str = "daily"  # daily/permanent/event/special
     priority: int = 10  # 1~99，越小越优先
     repeat: RepeatConfig | None = None
+    execution_mode: str = "daily"  # 执行模式：daily=按天执行一次 / per_slot=每时间段各执行一次（设计书 §5.2）
     max_daily: int | None = None
     max_fail_streak: int = 10
     active_range: list[str] | None = None  # ["2026-07-20", "2026-08-20"]
-    time_start: str | None = None  # "08:00"
-    time_end: str | None = None  # "23:00"
+    time_start: str | None = None  # "08:00"（单时段；与 time_slots 互斥）
+    time_end: str | None = None  # "23:00"（单时段；与 time_slots 互斥）
+    time_slots: list[list[str]] | None = None  # 多时段 [["10:00","12:00"],["12:00","14:00"]]，2+ 时段时优先
     team_id: str | None = None
     floor: int | None = None
+    total_count: int | None = None  # 累计执行次数上限（活动期累计）
 
 
 class ScheduleStatus(str, Enum):
@@ -118,9 +123,11 @@ class Scheduler:
         state_manager: Any = None,
         store: TaskStateStore | None = None,
     ):
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._config = config
-        self._state_mgr = state_manager
+        self._state_manager = state_manager
+        self._state_mgr = self._state_manager  # 兼容别名
         self._store = store
 
         # 线程安全（§2.3）
@@ -130,12 +137,22 @@ class Scheduler:
         self._tasks: dict[str, TaskConfig] = {}       # 任务名 → TaskConfig
         self._next_run: dict[str, datetime] = {}      # 任务名 → 下次执行时间
         self._today_count: dict[str, int] = {}        # 任务名 → 今日已执行次数
+        self._total_count: dict[str, int] = {}        # 任务名 → 累计已执行次数（活动期累计）
+        self._time_window_start: dict[str, datetime] = {}  # 任务名 → execution_rule time 模式窗口起点
         self._last_daily_reset: date = date.today()   # 上次每日重置日期
         self._timezone: tzinfo = TZ_UTC8              # 默认 UTC+8
 
         # 运行时状态（§2.2 对外暴露）
         self.schedule_queue: list[TaskInfo] = []       # 对外只读的快照
         self.task_status: dict[str, ScheduleStatus] = {}  # 任务名 → 当前调度状态
+
+        # 到期日志去重（build_schedule 结果变化时才打印，避免刷屏）
+        self._last_due_names: tuple[str, ...] | None = None
+
+        # 配置变更 → 热重载任务（保存后立即生效）
+        self._bus.subscribe(Events.CONFIG_CHANGED, self._on_config_changed)
+        # 触发式任务：02-TriggerWatcher 识别命中触发模板 → 置为到期（§3.1 trigger 例外）
+        self._bus.subscribe(Events.TRIGGER_DETECTED, self._on_trigger_detected)
 
     # ── 配置加载（§5.3）──────────────────────────────────────
 
@@ -160,15 +177,30 @@ class Scheduler:
 
             # 构建 RepeatConfig
             repeat_raw = getattr(raw, 'repeat', None) or {}
+            # 每轮循环：repeat.loop_count 优先，顶层 loop_count 兜底（UI 表单保存到顶层）
+            _rep_loop = (repeat_raw.get('loop_count') if isinstance(repeat_raw, dict)
+                         else getattr(repeat_raw, 'loop_count', None))
+            _top_loop = getattr(raw, 'loop_count', None)
             repeat = RepeatConfig(
                 type=repeat_raw.get('type', 'daily') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'type', 'daily'),
                 value=repeat_raw.get('value') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'value', None),
                 weekday=repeat_raw.get('weekday') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'weekday', None),
                 window=repeat_raw.get('window') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'window', None),
                 expire_at=repeat_raw.get('expire_at') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'expire_at', None),
-                loop_count=repeat_raw.get('loop_count') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'loop_count', None),
+                loop_count=_rep_loop if _rep_loop is not None else _top_loop,
                 monthly_day=repeat_raw.get('monthly_day', 1) if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'monthly_day', 1),
+                total_count=repeat_raw.get('total_count') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'total_count', None),
+                trigger_templates=repeat_raw.get('trigger_templates') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'trigger_templates', None),
             )
+
+            # 执行模式：execution_mode（daily/per_slot），兼容旧 execution_rule
+            execution_mode = getattr(raw, 'execution_mode', None)
+            if execution_mode not in ('daily', 'per_slot'):
+                # 旧字段迁移：execution_rule count>1 → per_slot，否则 daily
+                _er = getattr(raw, 'execution_rule', None) or {}
+                _er_val = (_er.get('value') if isinstance(_er, dict)
+                           else getattr(_er, 'value', None)) or 1
+                execution_mode = 'per_slot' if _er_val > 1 else 'daily'
 
             config = TaskConfig(
                 name=name,
@@ -177,29 +209,40 @@ class Scheduler:
                 category=getattr(raw, 'category', 'daily'),
                 priority=getattr(raw, 'priority', 10),
                 repeat=repeat,
+                execution_mode=execution_mode,
                 max_daily=getattr(raw, 'max_daily', None),
                 max_fail_streak=getattr(raw, 'max_fail_streak', 10),
                 active_range=getattr(raw, 'active_range', None),
                 time_start=getattr(raw, 'time_start', None),
                 time_end=getattr(raw, 'time_end', None),
+                time_slots=getattr(raw, 'time_slots', None),
                 team_id=getattr(raw, 'team_id', None),
                 floor=getattr(raw, 'floor', None),
+                total_count=getattr(raw, 'total_count', None),
             )
 
             with self._lock:
                 self._tasks[name] = config
                 # 从持久化恢复或计算初始 next_run_time（§5.4 异常恢复④）
+                # trigger 类型：不设置初始 next_run（等待外部触发）
                 if self._store and name not in self._next_run:
                     stored = self._store.get(name)
                     if stored and stored.get('next_run_time'):
                         try:
-                            self._next_run[name] = datetime.fromisoformat(stored['next_run_time'])
+                            self._next_run[name] = self._ensure_tz(
+                                datetime.fromisoformat(stored['next_run_time']))
                         except (ValueError, TypeError):
-                            self._next_run[name] = self._calc_initial_next_run(config)
+                            nrt = self._calc_initial_next_run(config)
+                            if nrt is not None:
+                                self._next_run[name] = nrt
                     else:
-                        self._next_run[name] = self._calc_initial_next_run(config)
+                        nrt = self._calc_initial_next_run(config)
+                        if nrt is not None:
+                            self._next_run[name] = nrt
                 elif name not in self._next_run:
-                    self._next_run[name] = self._calc_initial_next_run(config)
+                    nrt = self._calc_initial_next_run(config)
+                    if nrt is not None:
+                        self._next_run[name] = nrt
 
                 # today_count 从持久化恢复
                 if self._store:
@@ -211,14 +254,201 @@ class Scheduler:
                 else:
                     self._today_count.setdefault(name, 0)
 
-    def _calc_initial_next_run(self, config: TaskConfig) -> datetime:
-        """计算初始 next_run_time"""
+    def reload_from_config(self, changed_task: str | None = None) -> None:
+        """
+        热重载任务配置（保存后立即生效）。
+
+        清空并重新从 tasks.yaml 加载全部任务 → 恢复仍在任务的
+        运行时状态（next_run/today_count/total_count）→ 新任务
+        计算初始 next_run → 清理已删除任务的状态 → 原子写盘。
+
+        Args:
+            changed_task: 本次被保存/修改的任务名。仅对该任务执行
+                提前评估（窗口内且今日未执行 → 提前到当前时刻），
+                避免保存一个任务时把其他窗口内任务也全部提前。
+        """
+        with self._lock:
+            self._tasks.clear()
+        self.load_tasks_from_config()  # 内部自行持锁
+
+        with self._lock:
+            # 清理已删除/禁用的任务状态
+            for key in (self._next_run, self._today_count, self._total_count,
+                        self.task_status, self._time_window_start):
+                for name in list(key):
+                    if name not in self._tasks:
+                        key.pop(name, None)
+            # 新任务：计算初始 next_run（trigger 类型不设置，等待外部触发）
+            now = datetime.now(self._timezone)
+            for name, cfg in self._tasks.items():
+                if name not in self._next_run:
+                    nrt = self._calc_initial_next_run(cfg)
+                    if nrt is not None:
+                        self._next_run[name] = nrt
+                self._today_count.setdefault(name, 0)
+                self._total_count.setdefault(name, 0)
+
+            # 提前评估：仅对本次变更的任务生效
+            # （当前在可执行窗口内、今日未执行、next_run 在未来
+            #   → 提前到当前时刻，保存配置后立即执行）
+            targets = [changed_task] if changed_task else []
+            for name in targets:
+                cfg = self._tasks.get(name)
+                if cfg is None:
+                    continue
+                nrt = self._next_run.get(name)
+                if (nrt is not None and nrt > now
+                        and self._today_count.get(name, 0) == 0
+                        and self._now_in_window(cfg, now)):
+                    self._next_run[name] = now
+                    self.task_status[name] = ScheduleStatus.WAITING
+        self.save_state()
+
+    def _now_in_window(self, config: TaskConfig, now: datetime) -> bool:
+        """
+        当前时刻是否在任务的每日时间窗口内（§3.1 ②）。
+
+        多时段（time_slots）：当前时间落在任一时段内即视为在窗口内。
+        单时段（time_start/time_end）：向后兼容的原有判断。
+        """
+        # 多时段优先
+        if config.time_slots:
+            current_time = now.strftime("%H:%M")
+            for s, e in config.time_slots:
+                if s and current_time < s:
+                    continue
+                if e and current_time > e:
+                    continue
+                return True
+            return False
+        # 单时段（向后兼容）
+        if config.time_start or config.time_end:
+            current_time = now.strftime("%H:%M")
+            if config.time_start and current_time < config.time_start:
+                return False
+            if config.time_end and current_time > config.time_end:
+                return False
+        return True
+
+    def _next_slot_time(self, config: TaskConfig, after: datetime) -> datetime | None:
+        """
+        返回 after 之后的下一个时段起点（多时段 time_slots）。
+
+        - 今天还有未过的时段起点 → 返回该起点
+        - 今天所有时段起点均已过 → 次日第一个时段起点
+        - 无 time_slots → None（调用方回退到 RepeatRule）
+        """
+        slots = config.time_slots
+        if not slots:
+            return None
+        for s, _e in slots:
+            try:
+                sh, sm = map(int, s.split(":"))
+            except (ValueError, AttributeError):
+                continue
+            start_dt = after.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            if start_dt > after:
+                return start_dt
+        # 全部已过 → 次日第一个时段
+        try:
+            sh, sm = map(int, slots[0][0].split(":"))
+        except (ValueError, AttributeError):
+            return None
+        return (after + timedelta(days=1)).replace(hour=sh, minute=sm, second=0, microsecond=0)
+
+    def _next_day_first_slot(self, config: TaskConfig, after: datetime) -> datetime | None:
+        """
+        返回次日第一个时段起点（多时段 time_slots 的 daily 模式）。
+        无 time_slots → None（调用方回退到 RepeatRule daily 推进）。
+        """
+        slots = config.time_slots
+        if not slots:
+            return None
+        try:
+            sh, sm = map(int, slots[0][0].split(":"))
+        except (ValueError, AttributeError):
+            sh, sm = 6, 0
+        return (after + timedelta(days=1)).replace(hour=sh, minute=sm, second=0, microsecond=0)
+
+    def _on_config_changed(self, source: str = "", task_name: str | None = None, **kw) -> None:
+        """tasks 配置变更 → 热重载（保存立即生效，§3.2 补充）"""
+        if source and source not in ("tasks", "reload"):
+            return
+        try:
+            self.reload_from_config(changed_task=task_name)
+            # 通知 UI 刷新日程
+            self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
+                              queue=[t.name for t in self.build_schedule()])
+        except Exception:
+            pass
+
+    def _on_trigger_detected(self, task_name: str = "", source: str = "", **kw) -> None:
+        """触发式任务识别命中 → 置 next_run=now（立即到期入队，§3.1 trigger 例外）。
+
+        调用方：02-TriggerWatcher 识别到触发模板后发布 TRIGGER_DETECTED。
+        本方法内部调 update_next_run(name, now) 复用既有入队链路。
+        """
+        if not task_name:
+            return
+        config = self._tasks.get(task_name)
+        if not config or not config.enabled:
+            return
+        if config.repeat and config.repeat.type != 'trigger':
+            return  # 仅对触发式任务生效
+        self._log("info", f"[05-调度] 触发命中(trigger_detected): {task_name} → 置为到期入队", task=task_name)
+        self.update_next_run(task_name, datetime.now(self._timezone))
+        self.task_status[task_name] = ScheduleStatus.WAITING
+        # 通知 UI 刷新队列（build_schedule 会拾取该任务）
+        try:
+            self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
+                              queue=[t.name for t in self.build_schedule(publish=False)])
+        except Exception:
+            pass
+
+    def _log(self, level: str, message: str, task: str = "") -> None:
+        """模块级日志：发布 LOG_RECORD（UI 日志面板可见），兜底 print"""
+        try:
+            self._bus.publish(Events.LOG_RECORD, source="scheduler", level=level,
+                              message=message, task=task)
+        except Exception:
+            print(f"[{level}] {message}")
+
+    @staticmethod
+    def _ensure_tz(dt: datetime, tz: tzinfo = TZ_UTC8) -> datetime:
+        """规范化时区：naive datetime → 附加默认时区（UTC+8）。
+
+        防御持久化/外部传入的 naive 时间（如 UI 手动设置 next_run 时用
+        datetime.now()），避免与 aware 的 now 比较时抛
+        TypeError: can't compare offset-naive and offset-aware datetimes。
+        """
+        if dt is None:
+            return dt
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=tz)
+        return dt
+
+    def _calc_initial_next_run(self, config: TaskConfig) -> datetime | None:
+        """计算初始 next_run_time（支持多时段 time_slots）。
+
+        trigger 类型返回 None（不设置 next_run，等待外部触发）。
+        """
         now = datetime.now(self._timezone)
+        # trigger：无时间调度，不产生初始 next_run
+        if config.repeat and config.repeat.type == 'trigger':
+            return None
+        # 多时段：当前在某时段内 → 立即执行；否则 → 下一时段起点
+        if config.time_slots:
+            if self._now_in_window(config, now):
+                return now
+            nxt = self._next_slot_time(config, now)
+            if nxt:
+                return nxt
         if config.repeat:
             rule = RepeatRule(
                 type=config.repeat.type,
                 interval=config.repeat.value or 1,
                 time=config.time_start or "06:00",
+                time_end=config.time_end or "",
                 weekdays=[config.repeat.weekday] if config.repeat.weekday is not None else [],
                 expire_date=config.repeat.expire_at or "",
             )
@@ -257,11 +487,12 @@ class Scheduler:
                 # 不可恢复错误熔断，保持 skipped
                 self.task_status[name] = ScheduleStatus.SKIPPED
 
-            # 恢复 next_run_time
+            # 恢复 next_run_time（naive 自动附加时区，防御历史脏数据）
             nrt = st.get('next_run_time')
             if nrt:
                 try:
-                    self._next_run[name] = datetime.fromisoformat(nrt)
+                    self._next_run[name] = self._ensure_tz(
+                        datetime.fromisoformat(nrt))
                 except (ValueError, TypeError):
                     pass
 
@@ -269,8 +500,28 @@ class Scheduler:
             tc = st.get('today_count', 0)
             self._today_count[name] = tc
 
+            # 恢复累计总次数
+            self._total_count[name] = st.get('total_count', 0)
+
+            # 恢复 time 模式窗口起点（naive 自动附加时区）
+            ws = st.get('window_start')
+            if ws:
+                try:
+                    self._time_window_start[name] = self._ensure_tz(
+                        datetime.fromisoformat(ws))
+                except (ValueError, TypeError):
+                    pass
+
         # _last_daily_reset 初始化为今天（§2.3 + §5.3 load_state 说明）
         self._last_daily_reset = date.today()
+
+        # on_enter 启动任务：每次启动重置 next_run=now（设计书 §5.3）
+        # 使「每次运行启动后执行一次」在本轮运行重新激活
+        _start_now = datetime.now(self._timezone)
+        for _n, _cfg in self._tasks.items():
+            if _cfg.repeat and _cfg.repeat.type == 'on_enter':
+                self._next_run[_n] = _start_now
+                self.task_status[_n] = ScheduleStatus.WAITING
 
     def save_state(self) -> None:
         """原子写盘 task_state.json（§5.3 + §4.3）"""
@@ -292,6 +543,11 @@ class Scheduler:
                 "task_name": name,
                 "next_run_time": nrt.isoformat() if nrt else "",
                 "today_count": self._today_count.get(name, 0),
+                "total_count": self._total_count.get(name, 0),
+                "window_start": (
+                    self._time_window_start[name].isoformat()
+                    if name in self._time_window_start else ""
+                ),
                 "fail_streak": real_fail_streak,
                 "last_done": real_last_done,
                 "last_status": real_last_status,
@@ -306,7 +562,7 @@ class Scheduler:
 
     # ── 调度查询（§5.3 + §3.2）───────────────────────────────
 
-    def build_schedule(self) -> list[TaskInfo]:
+    def build_schedule(self, publish: bool = True) -> list[TaskInfo]:
         """
         生成日程表（§3.2 + §5.3）。
 
@@ -317,11 +573,15 @@ class Scheduler:
         ④   对每个任务：is_due() + check_times_limit()
         ⑤   过滤 → 按 priority 升序 → 同优先级按 category 排序
         ⑥ 释放 _lock
-        ⑦ 发布 SCHEDULE_UPDATED 事件（已无锁）
+        ⑦ 发布 SCHEDULE_UPDATED 事件（已无锁；publish=False 时跳过，供只读查询）
         ⑧ 返回排序后的 TaskInfo 列表
+
+        Args:
+            publish: 是否发布 SCHEDULE_UPDATED 事件。UI 定时只读查询时传 False，
+                     避免事件回环（查询 → 刷新 → 查询）。
         """
         with self._lock:
-            self.check_daily_reset()
+            self._check_daily_reset()
 
             now = datetime.now(self._timezone)
             result: list[TaskInfo] = []
@@ -330,14 +590,24 @@ class Scheduler:
                 if not config.enabled:
                     continue
 
-                # 熔断检查
+                # 状态过滤（§3.2）：skipped 直接跳过；
+                # completed 且 next_run 已被清空（on_enter 本轮已完成 / total_count 达上限）
+                # → 跳过，防止反复入队。max_daily 满但 next_run 已推进 → 走 is_due 次日恢复
                 task_status = self.task_status.get(name)
                 if task_status == ScheduleStatus.SKIPPED:
                     continue
+                if task_status == ScheduleStatus.COMPLETED and name not in self._next_run:
+                    continue
 
-                # 三重判据
+                # 三重判据 + 次数上限
                 if not self.is_due(name, now):
-                    status = ScheduleStatus.WAITING
+                    # 过期未执行（已错过今日窗口/有效期）→ 自动推进下一次
+                    self._advance_stale_task(name, config, now)
+                    status = self.task_status.get(name, ScheduleStatus.WAITING)
+                elif (config.total_count is not None
+                      and self._total_count.get(name, 0) >= config.total_count):
+                    # 累计总次数已达上限 → 永久完成
+                    status = ScheduleStatus.COMPLETED
                 elif not self._check_times_limit(name):
                     status = ScheduleStatus.COMPLETED
                 else:
@@ -357,22 +627,154 @@ class Scheduler:
             # 按 priority 升序（1~99，越小越优先）→ 同优先级按 category 排序
             cat_order = {"daily": 0, "permanent": 1, "event": 2, "special": 3}
             result.sort(key=lambda x: (x.priority, cat_order.get(x.category, 99)))
+            # 到期日志去重：结果变化时才打印（避免填充线程每轮刷屏）
+            due_names = tuple(sorted(t.name for t in result))
+            if due_names != self._last_due_names:
+                self._last_due_names = due_names or None
+                if result:
+                    self._log("info",
+                              f"[05-调度] 到期任务 {len(result)} 个: "
+                              f"{', '.join(t.name for t in result)}")
 
         # 已无锁时发布事件
-        self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
-                          queue=[t.name for t in result])
+        if publish:
+            self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
+                              queue=[t.name for t in result])
 
         self.schedule_queue = result
         return result
+
+    def get_due_tasks(self) -> list[dict[str, Any]]:
+        """
+        待执行任务列表（due，已到期等待执行）。
+
+        供 UI 队列面板「待执行」区域展示。
+        纯调度查询：不依赖启动/运行状态，任何时刻都可调用；
+        内部走 build_schedule(publish=False)，会顺带推进过期任务、
+        更新 task_status（即自动整理调度队列）。
+        """
+        result = self.build_schedule(publish=False)
+        return [
+            {
+                "name": t.name,
+                "next_run": t.next_run.strftime("%m-%d %H:%M") if t.next_run else "",
+                "priority": t.priority,
+            }
+            for t in result
+        ]
 
     def get_next_task(self) -> str | None:
         """获取下一个到期任务名（§5.3 + §5.4）"""
         schedule = self.build_schedule()
         return schedule[0].name if schedule else None
 
+    def get_upcoming(self) -> list[dict[str, Any]]:
+        """
+        未开始任务列表（waiting，未到 next_run_time）。
+        供 UI 队列面板「未开始」区域展示。
+        已失效任务（活动期结束/次数用尽/到期）不进入此处，归入「已失效」区。
+        """
+        with self._lock:
+            now = datetime.now(self._timezone)
+            today_str = now.strftime("%Y-%m-%d")
+            result: list[dict[str, Any]] = []
+            for name, cfg in self._tasks.items():
+                if not cfg.enabled:
+                    continue
+                # 已失效（过期）任务不进入未开始
+                if self._invalid_reason(cfg, now, today_str):
+                    continue
+                status = self.task_status.get(name, ScheduleStatus.WAITING)
+                nrt = self._next_run.get(name)
+                if status == ScheduleStatus.WAITING and (nrt is None or nrt > now):
+                    result.append({
+                        "name": name,
+                        "next_run": nrt.strftime("%m-%d %H:%M") if nrt else "",
+                    })
+            result.sort(key=lambda x: x["next_run"] or "9999")
+            return result
+
+    def get_invalid_tasks(self) -> list[dict[str, Any]]:
+        """
+        已失效任务列表（已过期，供 UI 队列面板「已失效」区域）。
+
+        失效原因（满足其一）：
+          - 累计次数达上限（total_count 用尽）
+          - 活动有效期已结束（active_range 过期）
+          - 到期日已过（repeat.type=expire_at）
+          - next_run 已被清空（调度器标记永久完成）
+        """
+        with self._lock:
+            now = datetime.now(self._timezone)
+            today_str = now.strftime("%Y-%m-%d")
+            result: list[dict[str, Any]] = []
+            for name, cfg in self._tasks.items():
+                if not cfg.enabled:
+                    continue
+                reason = self._invalid_reason(cfg, now, today_str)
+                if reason:
+                    result.append({
+                        "name": name,
+                        "status": reason,  # 已过期 / 本轮已完成
+                        "detail": self._invalid_detail(cfg),
+                    })
+            return result
+
+    def _invalid_reason(self, config: TaskConfig, now: datetime, today_str: str) -> str | None:
+        """返回任务的失效原因（已过期），否则 None。调用方需持有 _lock。"""
+        name = config.name
+        # ① 累计次数达上限
+        if (config.total_count is not None
+                and self._total_count.get(name, 0) >= config.total_count):
+            return "已过期"
+        # ② 活动有效期已结束
+        if config.active_range and len(config.active_range) > 1:
+            end_date = config.active_range[1]
+            if end_date and today_str > end_date:
+                return "已过期"
+        # ③ expire_at 到期日已过
+        if (config.repeat and config.repeat.type == "expire_at"
+                and config.repeat.expire_at and today_str > config.repeat.expire_at):
+            return "已过期"
+        # ④ next_run 已被清空（调度器标记永久完成 / on_enter / trigger 本轮完成）
+        if (self.task_status.get(name) == ScheduleStatus.COMPLETED
+                and name not in self._next_run):
+            if config.repeat and config.repeat.type == 'on_enter':
+                return "本轮已完成"
+            if config.repeat and config.repeat.type == 'trigger':
+                return "等待下次触发"
+            return "已过期"
+        return None
+
+    def _invalid_detail(self, config: TaskConfig) -> str:
+        """失效任务的说明文字。调用方需持有 _lock。"""
+        name = config.name
+        if config.repeat and config.repeat.type == 'on_enter':
+            return "下次启动执行"
+        if config.repeat and config.repeat.type == 'trigger':
+            return "外部触发后重新激活"
+        if config.total_count is not None:
+            return f"累计 {self._total_count.get(name, 0)}/{config.total_count} 次已完成"
+        if config.active_range and len(config.active_range) > 1:
+            return f"活动期 {config.active_range[0]}~{config.active_range[1]} 已结束"
+        if (config.repeat and config.repeat.type == "expire_at"
+                and config.repeat.expire_at):
+            return f"到期日 {config.repeat.expire_at} 已过"
+        return "任务已结束"
+
     def get_all_tasks(self) -> list[TaskConfig]:
         """获取所有已注册任务的 TaskConfig（§5.3）"""
         return list(self._tasks.values())
+
+    def get_config(self, task_name: str) -> TaskConfig | None:
+        """查询单个任务的 TaskConfig（供执行层注入 task_config）"""
+        with self._lock:
+            return self._tasks.get(task_name)
+
+    @property
+    def next_run_time(self) -> dict[str, datetime]:
+        """各任务的下次执行时间映射表（§2.2 只读对外）"""
+        return dict(self._next_run)
 
     def get_next_run_time(self, task_name: str) -> datetime | None:
         """查询任务的 next_run_time（§5.3）"""
@@ -395,20 +797,16 @@ class Scheduler:
         nrt = self._next_run.get(task_name)
         if nrt is None:
             return False
-        if now < nrt:
+        if now < self._ensure_tz(nrt):
             return False
 
         config = self._tasks.get(task_name)
         if not config:
             return False
 
-        # ② 每日时间窗口
-        if config.time_start or config.time_end:
-            current_time = now.strftime("%H:%M")
-            if config.time_start and current_time < config.time_start:
-                return False
-            if config.time_end and current_time > config.time_end:
-                return False
+        # ② 每日时间窗口（单时段 time_start/time_end 或多时段 time_slots）
+        if not self._now_in_window(config, now):
+            return False
 
         # ③ 活动有效期
         if config.active_range:
@@ -428,6 +826,68 @@ class Scheduler:
         if not config or config.max_daily is None:
             return True
         return self._today_count.get(task_name, 0) < config.max_daily
+
+    def _advance_stale_task(self, task_name: str, config: TaskConfig, now: datetime) -> None:
+        """
+        过期未执行自动推进（§3.3 补充）。
+
+        当 next_run_time 已到期、但当前已错过每日时间窗口（超过 time_end）
+        或活动有效期已结束 → 自动推进 next_run_time 到下一个有效时点：
+          daily      → 次日 time_start
+          weekly     → 下周匹配 weekday
+          interval_days / interval_hours → N 天/小时后
+        保证推进结果 > now（避免 nrt 滞后多日仍不过期）。
+
+        没有该逻辑时，过期任务会永远停留在 WAITING 状态（is_due 因窗口已过
+        返回 False，但无人推进 next_run_time）。
+        """
+        nrt = self._next_run.get(task_name)
+        if nrt is None or self._ensure_tz(nrt) > now:
+            return  # 未到时间，正常等待
+
+        # 当前是否仍在每日时间窗口内（单时段或多时段）
+        if self._now_in_window(config, now):
+            return  # 窗口内 → 正常到期执行
+
+        # 活动有效期已结束 → 永久完成
+        if config.active_range:
+            today_str = now.strftime("%Y-%m-%d")
+            end_date = config.active_range[1] if len(config.active_range) > 1 else None
+            if end_date and today_str > end_date:
+                self.task_status[task_name] = ScheduleStatus.COMPLETED
+                self._next_run.pop(task_name, None)
+                return
+
+        # 多时段：窗口外 → 推进到下一个时段起点
+        if config.time_slots:
+            nxt = self._next_slot_time(config, now)
+            if nxt:
+                self._next_run[task_name] = nxt
+                self.task_status[task_name] = ScheduleStatus.WAITING
+                return
+
+        # 按重复规则推进到下一有效时点
+        if config.repeat:
+            rule = RepeatRule(
+                type=config.repeat.type,
+                interval=config.repeat.value or 1,
+                time=config.time_start or "06:00",
+                weekdays=[config.repeat.weekday] if config.repeat.weekday is not None else [],
+                expire_date=config.repeat.expire_at or "",
+            )
+            sentinel = datetime.max.replace(tzinfo=self._timezone)
+            next_time = rule.calc_next_run(nrt)
+            # 确保推进到 now 之后（防止 nrt 滞后多日）
+            for _ in range(10):
+                if next_time == sentinel or next_time == datetime.max or next_time > now:
+                    break
+                next_time = rule.calc_next_run(next_time)
+            if next_time == sentinel or next_time == datetime.max:
+                self.task_status[task_name] = ScheduleStatus.COMPLETED
+                self._next_run.pop(task_name, None)
+            else:
+                self._next_run[task_name] = next_time
+                self.task_status[task_name] = ScheduleStatus.WAITING
 
     # 内部别名
     _check_times_limit = check_times_limit
@@ -456,37 +916,83 @@ class Scheduler:
                     stored = self._store.get(task_name) or {}
                     stored.pop('skip_reason', None)
 
-                # 按 RepeatRule 推进 next_run_time
-                if config.repeat:
-                    rule = RepeatRule(
-                        type=config.repeat.type,
-                        interval=config.repeat.value or 1,
-                        time=config.time_start or "06:00",
-                        weekdays=[config.repeat.weekday] if config.repeat.weekday is not None else [],
-                        expire_date=config.repeat.expire_at or "",
-                    )
+                next_count = self._today_count.get(task_name, 0) + 1
+                self._today_count[task_name] = next_count
+                total_count = self._total_count.get(task_name, 0) + 1
+                self._total_count[task_name] = total_count
 
-                    last_run = self._next_run.get(task_name) or datetime.now(self._timezone)
-                    next_time = rule.calc_next_run(last_run)
+                now = datetime.now(self._timezone)
 
-                    if next_time == datetime.max:
-                        # once 类型或已过期 → 标记 completed
-                        self.task_status[task_name] = ScheduleStatus.COMPLETED
-                        self._next_run.pop(task_name, None)
-                    else:
-                        self._next_run[task_name] = next_time
-                        self.task_status[task_name] = ScheduleStatus.WAITING
-                else:
-                    # 无 repeat 配置 → 默认 daily
-                    next_time = datetime.now(self._timezone) + timedelta(days=1)
-                    self._next_run[task_name] = next_time
+                # 累计总次数上限（活动期累计）：达到 → 永久完成
+                total_limit_ok = (config.total_count is None) or (total_count < config.total_count)
+                daily_cap_ok = (config.max_daily is None) or (next_count < config.max_daily)
 
-                self._today_count[task_name] = self._today_count.get(task_name, 0) + 1
-                # 已达每日上限则标记 completed，否则 waiting
-                if config.max_daily and self._today_count.get(task_name, 0) >= config.max_daily:
+                # ── 推进 next_run_time（设计书 §3.3 execution_mode）──
+                repeat_type = config.repeat.type if config.repeat else 'daily'
+
+                if not total_limit_ok:
+                    # 累计达上限 → 永久完成（不再调度）
                     self.task_status[task_name] = ScheduleStatus.COMPLETED
+                    self._next_run.pop(task_name, None)
+                elif repeat_type == 'on_enter':
+                    # 启动任务：本轮完成，清空 next_run（下次启动 load_state 重置激活）
+                    self.task_status[task_name] = ScheduleStatus.COMPLETED
+                    self._next_run.pop(task_name, None)
+                elif repeat_type == 'trigger':
+                    # 触发式任务：本轮完成，清空 next_run（等待外部再次触发，load_state 不自动激活）
+                    self.task_status[task_name] = ScheduleStatus.COMPLETED
+                    self._next_run.pop(task_name, None)
+                elif config.time_slots:
+                    # 多时段：按 execution_mode 推进
+                    mode = config.execution_mode or 'daily'
+                    if mode == 'per_slot' and daily_cap_ok:
+                        # 每时段各执行一次 → 下一时段起点（今日无剩余 → 次日首个）
+                        slot_next = self._next_slot_time(config, now)
+                        if slot_next is not None:
+                            self._next_run[task_name] = slot_next
+                            self.task_status[task_name] = ScheduleStatus.WAITING
+                        else:
+                            self._next_run.pop(task_name, None)
+                            self.task_status[task_name] = ScheduleStatus.COMPLETED
+                    else:
+                        # daily（按天执行一次）或 per_slot 今日已满 → 次日首个时段起点
+                        nxt = self._next_day_first_slot(config, now)
+                        if nxt is not None:
+                            self._next_run[task_name] = nxt
+                        else:
+                            self._next_run[task_name] = now + timedelta(days=1)
+                        self.task_status[task_name] = (
+                            ScheduleStatus.COMPLETED if not daily_cap_ok else ScheduleStatus.WAITING
+                        )
                 else:
-                    self.task_status[task_name] = ScheduleStatus.WAITING
+                    # 单时段（无 time_slots）：按 RepeatRule 推进（daily/per_slot 每天一次）
+                    if config.repeat:
+                        rule = RepeatRule(
+                            type=config.repeat.type,
+                            interval=config.repeat.value or 1,
+                            time=config.time_start or "06:00",
+                            weekdays=[config.repeat.weekday] if config.repeat.weekday is not None else [],
+                            expire_date=config.repeat.expire_at or "",
+                        )
+                        last_run = self._ensure_tz(self._next_run.get(task_name) or now)
+                        next_time = rule.calc_next_run(last_run)
+                        # once 类型或已过期 → 标记 completed
+                        sentinel = datetime.max.replace(tzinfo=self._timezone)
+                        if next_time == sentinel or next_time == datetime.max:
+                            self.task_status[task_name] = ScheduleStatus.COMPLETED
+                            self._next_run.pop(task_name, None)
+                        else:
+                            self._next_run[task_name] = next_time
+                            self.task_status[task_name] = ScheduleStatus.WAITING
+                    else:
+                        # 无 repeat 配置 → 默认 daily
+                        self._next_run[task_name] = now + timedelta(days=1)
+
+                    # 已达每日上限则标记 completed（next_run 已推进，次日重置恢复）
+                    if config.max_daily and next_count >= config.max_daily:
+                        self.task_status[task_name] = ScheduleStatus.COMPLETED
+                    else:
+                        self.task_status[task_name] = ScheduleStatus.WAITING
 
             else:
                 # 失败：递增 fail_streak
@@ -514,15 +1020,23 @@ class Scheduler:
                     self.task_status[task_name] = ScheduleStatus.WAITING
 
         # 持锁外持久化 + 发布事件
+        _st = self.task_status.get(task_name, ScheduleStatus.WAITING)
+        _nrt = self._next_run.get(task_name)
+        _nrt_s = _nrt.strftime("%m-%d %H:%M") if _nrt else "无(等待外部触发)"
+        self._log("info",
+                  f"[05-调度] mark_done({task_name}, success={success}) "
+                  f"→ 状态: {_st.value} · 下次执行: {_nrt_s}",
+                  task=task_name)
         self.save_state()
         self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
                          task=task_name, success=success)
 
     # ── 每日重置（§3.4 + §5.3）──────────────────────────────
 
-    def check_daily_reset(self) -> None:
+    def _check_daily_reset(self) -> None:
         """
-        惰性检查跨日重置（§3.4 + §5.3 check_daily_reset）。
+        惰性检查跨日重置（§3.4 + §5.3）。
+        说明书 §5.3 标记为 🔒 私有方法。
 
         在 build_schedule() 持锁时调用，确保 DAILY_RESET 事件不会与 mark_done 交错。
         """
@@ -563,7 +1077,9 @@ class Scheduler:
                 self.task_status[task_name] = ScheduleStatus.WAITING
             config = self._tasks.get(task_name)
             if config and not self._next_run.get(task_name):
-                self._next_run[task_name] = self._calc_initial_next_run(config)
+                nrt = self._calc_initial_next_run(config)
+                if nrt is not None:
+                    self._next_run[task_name] = nrt
         if self._store:
             self._store.update(task_name, fail_streak=0, skip_reason='')
         self.save_state()
@@ -573,12 +1089,17 @@ class Scheduler:
     def update_next_run(self, task_name: str, next_run_time: datetime) -> None:
         """手动设置 next_run_time"""
         with self._lock:
-            self._next_run[task_name] = next_run_time
+            # 规范化时区：UI/外部可能传入 naive（datetime.now()），统一附加 UTC+8
+            self._next_run[task_name] = self._ensure_tz(next_run_time)
         self.save_state()
+        self._log("info",
+                  f"[05-调度] 手动/触发设置 next_run: {task_name} → "
+                  f"{next_run_time.strftime('%m-%d %H:%M:%S')}",
+                  task=task_name)
 
     # ── 活动日历导入（§3.5 + §5.3）─────────────────────────
 
-    def import_calendar(self, events: list[dict]) -> tuple[int, int]:
+    def import_calendar(self, events: list[CalendarEvent | dict]) -> tuple[int, int]:
         """
         导入活动日历（§3.5 + §5.3）。
 
@@ -593,33 +1114,50 @@ class Scheduler:
 
         with self._lock:
             for evt in events:
-                name = evt.get('name', '')
+                # 统一支持 dict 和 CalendarEvent 对象
+                if isinstance(evt, dict):
+                    name = evt.get('name', '')
+                    evt_start = evt.get('start', '')
+                    evt_end = evt.get('end', '')
+                    evt_window = evt.get('window')
+                    evt_type = evt.get('type', 'special')
+                    evt_display = evt.get('display_name', name)
+                else:
+                    name = evt.name
+                    evt_start = evt.start
+                    evt_end = evt.end
+                    evt_window = evt.window
+                    evt_type = evt.type
+                    evt_display = evt.display_name or name
+
                 if not name:
                     continue
 
                 if name in self._tasks:
                     # 更新现有任务的 active_range / window
                     config = self._tasks[name]
-                    config.active_range = [evt.get('start', ''), evt.get('end', '')]
-                    if evt.get('window'):
+                    config.active_range = [evt_start, evt_end]
+                    if evt_window:
                         if config.repeat:
-                            config.repeat.window = evt['window']
+                            config.repeat.window = evt_window
                     updated += 1
                 else:
                     # 新建 special 类型任务
                     repeat = RepeatConfig(
-                        type=evt.get('type', 'special'),
-                        window=evt.get('window'),
+                        type=evt_type,
+                        window=evt_window,
                     )
                     config = TaskConfig(
                         name=name,
-                        display_name=evt.get('display_name', name),
+                        display_name=evt_display,
                         category='event',
                         repeat=repeat,
-                        active_range=[evt.get('start', ''), evt.get('end', '')] if evt.get('start') else None,
+                        active_range=[evt_start, evt_end] if evt_start else None,
                     )
                     self._tasks[name] = config
-                    self._next_run[name] = self._calc_initial_next_run(config)
+                    nrt = self._calc_initial_next_run(config)
+                    if nrt is not None:
+                        self._next_run[name] = nrt
                     self._today_count[name] = 0
                     created += 1
 
@@ -639,6 +1177,7 @@ class Scheduler:
             self._today_count.clear()
             self.schedule_queue.clear()
             self.task_status.clear()
+            self._last_daily_reset = date.today()
 
 
 

@@ -40,6 +40,7 @@ class ApplicationBootstrap:
 
         # §2.1 模块实例字典
         self._components: dict[str, Any] = {}
+        self._modules = self._components  # 说明书 §2.1 要求名
 
         # §2.3
         self._init_order: list[str] = []       # 初始化顺序列表
@@ -161,15 +162,46 @@ class ApplicationBootstrap:
     # ── 第3层：核心功能 ───────────────────────────────────
 
     def _init_connection(self) -> None:
-        """初始化设备连接模块（§3.2 L3-⑤）"""
+        """初始化设备连接模块（§3.2 L3-⑤）
+
+        支持模拟设备模式：global.yaml 配置 device.mock=true 时，
+        注入 MockADBClient（无真实模拟器也可运行），并立即建立连接。
+        """
         from device.connection import ConnectionManager
         cfg = self._get("config_manager")
         state = self._get("state_manager")
+
+        # 读取 device.mock 开关
+        mock_enabled = False
+        try:
+            g = getattr(cfg, 'global_config', None)
+            if g is not None and getattr(g, 'device', None) is not None:
+                mock_enabled = bool(getattr(g.device, 'mock', False))
+        except Exception:
+            mock_enabled = False
+
+        adb = None
+        if mock_enabled:
+            from device.mock_adb import MockADBClient
+            adb = MockADBClient(assets_dir=str(self._root / "assets"))
+            mon = self._get("monitor")
+            if mon and hasattr(mon, 'info'):
+                mon.info("已启用模拟设备模式（无真实模拟器）", module="16-应用启动引导")
+
         conn = ConnectionManager(
+            adb_client=adb,
             config=cfg,
             event_bus=self._bus,
             state_manager=state,
         )
+
+        # 模拟模式：启动即连接（自检/UI 状态栏立即显示已连接）
+        if mock_enabled:
+            try:
+                conn.connect()
+            except Exception:
+                pass
+
         self._store("connection", conn)
         self._add_shutdown_hook("connection", "disconnect")
 
@@ -328,6 +360,14 @@ class ApplicationBootstrap:
         self._store("run_controller", rc)
         self._add_shutdown_hook("run_controller", "stop")
 
+        # 把 RunController 注入 RunBridge（供 UI 查询当前任务/队列）
+        bridge = self._get("bridge")
+        if bridge and hasattr(bridge, 'run') and hasattr(bridge.run, 'set_controller'):
+            try:
+                bridge.run.set_controller(rc)
+            except Exception:
+                pass
+
     # ── 第7层：用户界面 ───────────────────────────────────
 
     def _init_ui(self) -> None:
@@ -335,12 +375,12 @@ class ApplicationBootstrap:
         from ui.main_window import MainWindow
         from core.image_manager import ImageManager
         img_mgr = self._get("image_manager")
+        # MainWindow.__init__ 内部已调用 init_ui()，此处不重复调用
         window = MainWindow(
             param_bridge=self._get("bridge"),
             event_bus=self._bus,
             image_mgr=img_mgr,
         )
-        window.init_ui()
         window.refresh_task_list()
         self._store("main_window", window)
 

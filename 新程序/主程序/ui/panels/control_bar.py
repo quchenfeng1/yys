@@ -48,3 +48,13 @@ class ControlBar(QWidget):
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
         self.btn_pause.setEnabled(running)
+        # 运行开始时暂停按钮复位为「⏸ 暂停」
+        if running:
+            self.btn_pause.setText("⏸ 暂停")
+
+    def set_paused(self, paused: bool) -> None:
+        """更新暂停按钮状态（§3.7 运行启停）"""
+        if paused:
+            self.btn_pause.setText("▶ 继续")
+        else:
+            self.btn_pause.setText("⏸ 暂停")

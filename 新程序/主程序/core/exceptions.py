@@ -81,6 +81,30 @@ class MatchNotFoundError(ImageError):
     """未找到匹配结果"""
 
 
+class RecognitionError(ImageError):
+    """识别错误（所有识别异常的基类，§4.5）"""
+
+
+class AssetNotFoundError(RecognitionError):
+    """素材不存在"""
+
+
+class AssetMissingError(RecognitionError):
+    """素材缺失（AssetNotFoundError 的别名）"""
+
+
+class AssetCorruptedError(RecognitionError):
+    """素材文件损坏"""
+
+
+class RecognitionTimeoutError(RecognitionError):
+    """识别超时"""
+
+
+class OCRNotAvailableError(RecognitionError):
+    """OCR 引擎不可用"""
+
+
 # ── 任务异常 ────────────────────────────────────────────────
 class TaskError(YYSException):
     """任务执行错误"""

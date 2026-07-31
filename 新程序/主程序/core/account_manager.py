@@ -71,10 +71,13 @@ class AccountManager:
         scheduler: Any = None,              # §2.1 Scheduler
         cookie_dir: str | Path = "config/cookies",
     ):
-        self._config_mgr = config              # ConfigManager（用于读取 accounts.yaml）
+        self._config = config                    # ConfigManager（说明书 §2.1 要求名）
+        self._config_mgr = self._config          # 兼容别名
         self._connection = connection           # ADBClient（切换设备）
-        self._state_mgr = state_manager         # StateManager（更新状态）
-        self._bus = event_bus or get_global_bus()
+        self._state_manager = state_manager      # StateManager（说明书 §2.1 要求名）
+        self._state_mgr = self._state_manager    # 兼容别名
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._scheduler = scheduler             # Scheduler（刷新日程）
 
         self._cookie_dir = Path(cookie_dir)
@@ -151,7 +154,7 @@ class AccountManager:
         raw_accounts: list[dict] = []
 
         # 从 ConfigManager 读取
-        if self._config_mgr and hasattr(self._config_mgr, 'get_section'):
+        if self._config and hasattr(self._config, 'get_section'):
             try:
                 section = self._config_mgr.get_section("accounts")
                 raw_accounts = section.get("accounts", [])

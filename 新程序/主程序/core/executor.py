@@ -62,10 +62,12 @@ class Executor:
         self._connection = connection   # §2.1 ADBClient（点击/截图/滑动）
         self._monitor = monitor         # §2.1 日志监控（记录操作耗时）
         self._config = config           # §2.1 配置模块
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
 
         # §2.3 沙盒模式（Event 以便在操作中检查）
         self._dry_run_event = threading.Event()
+        self._dry_run = self._dry_run_event  # 说明书 §2.3 要求名
         if dry_run:
             self._dry_run_event.set()
 

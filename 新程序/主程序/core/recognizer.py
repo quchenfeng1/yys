@@ -30,8 +30,8 @@ from core.image_manager import ImageManager
 class MatchMode(str, Enum):
     """识别模式枚举（§5.3）"""
     AUTO = "auto"              # 模板优先，按元数据决定是否回退 OCR
-    TEMPLATE_ONLY = "template_only"  # 仅模板匹配
-    OCR_ONLY = "ocr_only"            # 仅 OCR 文字定位
+    TEMPLATE_ONLY = "template"  # 仅模板匹配
+    OCR_ONLY = "ocr"            # 仅 OCR 文字定位
 
 
 @dataclass
@@ -53,13 +53,6 @@ class MatchResult:
         self.center_y = self.y + self.height // 2
 
 
-@dataclass
-class ScreenshotCache:
-    """截图缓存条目"""
-    image: np.ndarray
-    timestamp: float
-
-
 class Recognizer:
     """图像识别引擎"""
 
@@ -77,7 +70,8 @@ class Recognizer:
         asset_dir: str = "assets",
     ):
         self._img_mgr = image_manager or ImageManager()
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._ocr = ocr_locator
         self._connection = connection
         self._config = config
@@ -121,6 +115,14 @@ class Recognizer:
 
     # ── 素材加载（§3.3） ─────────────────────────────────────
 
+    @staticmethod
+    def _imread_unicode(path: str) -> np.ndarray | None:
+        """支持中文路径的 cv2.imread 替代方案（§5.5）"""
+        try:
+            return cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        except Exception:
+            return None
+
     def _load_templates(self) -> None:
         """递归扫描 assets/，以 BGR 彩色图加载全部素材到 _asset_cache"""
         asset_path = Path(self._asset_dir)
@@ -132,7 +134,7 @@ class Recognizer:
             rel = str(f.relative_to(asset_path).with_suffix(""))
             # 替换路径分隔符为 /
             rel = rel.replace("\\", "/")
-            img = cv2.imread(str(f), cv2.IMREAD_COLOR)
+            img = self._imread_unicode(str(f))
             if img is None:
                 print(f"警告: 素材加载失败: {f}")
                 continue
@@ -291,7 +293,7 @@ class Recognizer:
 
         if best_val < thresh:
             self._bus.publish(Events.IMAGE_MATCH_NOT_FOUND, source="recognizer",
-                             name=template_name, confidence=float(best_val))
+                             template=template_name, confidence=float(best_val))
             raise MatchNotFoundError(
                 f"未找到匹配: {template_name} (最佳置信度: {best_val:.3f} < {thresh:.3f})"
             )
@@ -313,7 +315,7 @@ class Recognizer:
         self._latency_records.append(elapsed)
 
         self._bus.publish(Events.IMAGE_MATCH_FOUND, source="recognizer",
-                         name=template_name, confidence=match.confidence)
+                         template=template_name, confidence=match.confidence)
         return match
 
     def find_all(
@@ -418,29 +420,34 @@ class Recognizer:
         if name not in self._asset_cache:
             return None
 
-        if mode == "ocr_only":
+        if mode in ("ocr_only", "ocr"):
             if self._ocr and self._ocr.is_ready:
                 screen = self._get_screenshot()
+                if region:
+                    x, y, w, h = region
+                    screen = screen[y:y+h, x:x+w]
                 ocr_results = self._ocr.find_text(screen, name)
                 if ocr_results:
                     best = max(ocr_results, key=lambda r: r.confidence)
-                    return MatchResult(
+                    match = MatchResult(
                         template_name=name,
                         confidence=best.confidence,
-                        x=best.x,
-                        y=best.y,
+                        x=best.x + (region[0] if region else 0),
+                        y=best.y + (region[1] if region else 0),
                         width=best.width,
                         height=best.height,
                         method="ocr",
                     )
+                    self._set_cached_result(name, match)
+                    return match
             return None
 
         if mode == "smart":
             meta = self._meta.get(name, {})
             if meta.get("fallback_to_ocr"):
-                mode = "auto"
+                mode = MatchMode.AUTO.value
             else:
-                mode = "template_only"
+                mode = MatchMode.TEMPLATE_ONLY.value
 
         try:
             return self.find_one(name, threshold=threshold, region=region)
@@ -449,24 +456,29 @@ class Recognizer:
                 meta = self._meta.get(name, {})
                 if meta.get("fallback_to_ocr", False):
                     screen = self._get_screenshot()
+                    if region:
+                        x, y, w, h = region
+                        screen = screen[y:y+h, x:x+w]
                     ocr_results = self._ocr.find_text(screen, name)
                     if ocr_results:
                         best = max(ocr_results, key=lambda r: r.confidence)
-                        return MatchResult(
+                        match = MatchResult(
                             template_name=name,
                             confidence=best.confidence,
-                            x=best.x,
-                            y=best.y,
+                            x=best.x + (region[0] if region else 0),
+                            y=best.y + (region[1] if region else 0),
                             width=best.width,
                             height=best.height,
                             method="ocr",
                         )
+                        self._set_cached_result(name, match)
+                        return match
             return None
 
     def exists(self, name: str, threshold: float | None = None) -> bool:
-        """判断目标是否存在（内部调 find_one，不抛异常）"""
+        """判断目标是否存在（内部调 find，不抛异常）"""
         try:
-            return self.find_one(name, threshold=threshold) is not None
+            return self.find(name, threshold=threshold) is not None
         except Exception:
             return False
 
@@ -533,6 +545,35 @@ class Recognizer:
                 sleep_t = 0.5
             time.sleep(max(0.1, sleep_t))
         return None
+
+    def match_any(
+        self,
+        names: list[str],
+        region: tuple[int, int, int, int] | None = None,
+        threshold: float | None = None,
+    ) -> list[tuple[str, MatchResult]]:
+        """
+        识别列表批量识别（立即版，§5.3 match_any）。
+
+        对列表内所有模板匹配当前画面，返回命中集合 [(模板名, MatchResult), ...]。
+        未命中返回空列表。供 TriggerWatcher 触发监控使用——一次调用判断
+        \"屏幕上当前出现了识别列表中的哪些\"。
+
+        - 复用 find_one 的缓存/多尺度机制，不抛异常（缺失素材/识别失败直接跳过）
+        - 截图走 _get_screenshot（受 _cache_lock/_screenshot_ttl 保护）
+        """
+        results: list[tuple[str, MatchResult]] = []
+        for name in names:
+            if name not in self._asset_cache:
+                continue
+            try:
+                match = self.find_one(name, threshold=threshold, region=region)
+                results.append((name, match))
+            except (MatchNotFoundError, AssetNotFoundError, RecognitionError):
+                continue
+            except Exception:
+                continue
+        return results
 
     def clear_cache(self) -> None:
         """清空截图缓存和结果缓存（由 14-执行器模块 在步骤边界调用）"""

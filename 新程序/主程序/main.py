@@ -17,9 +17,6 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 
 from core.bootstrap import ApplicationBootstrap
-from core.event_bus import get_global_bus
-from core.events import Events
-from ui.main_window import MainWindow
 
 
 def main():
@@ -33,8 +30,11 @@ def main():
         print("启动失败，请检查日志。")
         sys.exit(1)
 
-    # 创建并显示主窗口
-    window = MainWindow()
+    # 使用 bootstrap 已创建的 MainWindow（含 param_bridge/event_bus/image_mgr 注入）
+    window = bootstrap.get("main_window")
+    if window is None:
+        print("启动失败：MainWindow 未初始化。")
+        sys.exit(1)
     window.show()
 
     # 注册信号处理（优雅退出）
@@ -49,5 +49,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
     main()

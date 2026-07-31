@@ -46,25 +46,25 @@ class ParamBridge:
         registry: Any = None,
         file_manager: Any = None,
     ):
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
+        self._state_manager = state_manager  # §2.1 状态管理
 
         # §2.1 创建子桥接器
         self.account = AccountBridge(account_manager)
         self.config = ConfigBridge(config)
-        self.run = RunBridge(event_bus=self._bus, controller=run_controller)
+        self.run = RunBridge(event_bus=self._event_bus, controller=run_controller)
         self.task = TaskBridge(
             registry=registry,
             scheduler=scheduler,
             task_manager=task_manager,
             config=config,
             file_manager=file_manager,
-            event_bus=self._bus,
+            event_bus=self._event_bus,
         )
-        self.ui = UIBinding(event_bus=self._bus, config=config)
+        self.ui = UIBinding(event_bus=self._event_bus, config=config)
 
-        # §5.3 订阅 state_changed（仅只读控件刷新，双向绑定走 config_changed）
-        self._bus.subscribe(Events.STATE_CHANGED,
-                           lambda **kw: self.ui._on_state_changed(**kw))
+        # UIBinding 已在自身 init 中订阅 STATE_CHANGED，无需重复订阅
 
     # ── §5.3 ─────────────────────────────────────────────
 

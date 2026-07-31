@@ -25,6 +25,8 @@ class LoggerEngine:
 
     def __init__(self) -> None:
         self._logger = _loguru_logger
+        # 设置默认 extra，保证格式串中的 {extra[scope]} 不会 KeyError
+        self._logger.configure(extra={"scope": "root"})
 
     def configure(
         self,
@@ -108,12 +110,12 @@ class LoggerEngine:
             enqueue=True,
         )
 
-        # 结构化 JSON 日志
+        # 结构化 JSON 日志（loguru 原生 serialize=True 输出 JSONL）
         if structured:
             self._logger.add(
                 str(log_path / "structured.jsonl"),
                 level=level,
-                format=lambda r: self._json_format(r),
+                serialize=True,  # 原生 JSON 序列化，避免自定义 lambda 被误解析为格式模板
                 rotation=rotation,
                 retention=retention,
                 compression=compression,
@@ -131,7 +133,7 @@ class LoggerEngine:
         )
 
         self._initialized = True
-        self._logger.info("Logger initialized: level=%s, dir=%s", level, log_path)
+        self._logger.info("Logger initialized: level={}, dir={}", level, log_path)
 
     @staticmethod
     def _json_format(record: dict) -> str:

@@ -27,6 +27,9 @@ class TaskContext:
     executor: Any = None  # §5.2 14-执行器模块（含安全注入）
     recognizer: Any = None  # §5.2 02-图像识别模块
     stop_event: threading.Event | None = None  # §5.2 停止信号
+    # 说明书 04 §BattleLoop：每场战斗结束的进度持久化回调
+    # 签名 on_progress(task_id, completed, total)，由 09-运行控制中心 注入
+    progress_saver: Any = None
 
     # 运行时元数据
     attempt: int = 1

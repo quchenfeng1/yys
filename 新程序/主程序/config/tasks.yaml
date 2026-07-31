@@ -1,1 +1,60 @@
-# 任务编排配置
+tasks:
+- name: daily_test
+  id: daily_test
+  display_name: 日常测试
+  category: daily
+  enabled: true
+  priority: 10
+  time_start: 06:00
+  time_end: '23:59'
+  max_daily: null
+  repeat:
+    type: daily
+    value: 1
+    loop_count: 3
+  active_range: null
+  total_count: null
+  execution_mode: daily
+  loop_count: 3
+  time_slots: null
+- name: once_test
+  id: once_test
+  display_name: 单次测试
+  category: special
+  enabled: false
+  priority: 10
+  time_start: 06:00
+  time_end: '23:59'
+  max_daily: null
+  repeat:
+    type: once
+    value: 1
+    loop_count: 1
+  active_range: null
+  total_count: null
+  execution_mode: daily
+  loop_count: 1
+  time_slots: null
+- name: combat_test
+  id: combat_test
+  display_name: 战斗测试
+  category: special
+  enabled: false
+  priority: 10
+  time_start: 06:00
+  time_end: '23:59'
+  max_daily: null
+  repeat:
+    type: daily
+    value: 1
+    loop_count: 5
+  active_range: null
+  total_count: null
+  execution_mode: daily
+  loop_count: 5
+  team_id: 阵容1
+  floor: 10
+  time_slots: null
+  max_fail_streak: 10
+  soul_setup: null
+  stamina_required: 0

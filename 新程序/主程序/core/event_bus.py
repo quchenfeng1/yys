@@ -91,7 +91,7 @@ class EventBus:
         self._dedup_lock = threading.Lock()
         self._subscribers: dict[str, list[Subscription]] = {}
         self._interceptors: list[InterceptorFn] = []
-        self._monitor = monitor  # §2.1 可选
+        self._monitor = monitor  # §2.1 可选（当前通过 logger 记录异常）
 
         # 异步队列（§3.3 队列背压：永不丢事件）
         self._queue: queue.Queue[Event] = queue.Queue(maxsize=max_queue)

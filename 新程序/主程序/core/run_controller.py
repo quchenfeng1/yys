@@ -68,7 +68,8 @@ class RunController:
         self._executor = executor
         self._recognizer = recognizer
         self._anti_detect = anti_detect
-        self._bus = event_bus or get_global_bus()
+        self._event_bus = event_bus or get_global_bus()
+        self._bus = self._event_bus  # 兼容别名
         self._monitor = monitor
         self._account_mgr = account_mgr
 
@@ -91,7 +92,7 @@ class RunController:
         self._scanner_running = threading.Event()
 
         # §2.3 错误计数+空闲计数
-        self._recover_count: dict[str, int] = {}
+        self._recover_count: dict[str, int] = {}  # 各任务连续恢复失败计数
         self._idle_counter: int = 0
         self._consecutive_errors: int = 0
         self._max_consecutive_errors: int = 10
@@ -117,6 +118,17 @@ class RunController:
         # §3.2 扫描间隔
         self._scanner_interval = scanner_interval
 
+        # §3.6 触发监控（TriggerWatcher，02-图像识别模块 子服务）
+        # 构造时内部创建（复用已注入的 recognizer/connection/event_bus，构造函数不变）
+        from core.trigger_watcher import TriggerWatcher
+        self._trigger_watcher: Any = None
+        if self._recognizer is not None:
+            self._trigger_watcher = TriggerWatcher(
+                recognizer=self._recognizer,
+                connection=self._connection,
+                event_bus=self._event_bus,
+            )
+
         # §3.4 订阅启停控制
         self._bus.subscribe(Events.START_REQUESTED, lambda **kw: self._on_start())
         self._bus.subscribe(Events.STOP_REQUESTED, lambda **kw: self._on_stop())
@@ -136,6 +148,11 @@ class RunController:
             return self._status.value if hasattr(self._status, "value") else str(self._status)
 
     @property
+    def state(self) -> str:
+        """说明书 §2.2 要求名（status 的别名）"""
+        return self.status
+
+    @property
     def is_running(self) -> bool:
         with self._state_lock:
             return self._status == RunState.RUNNING
@@ -151,6 +168,12 @@ class RunController:
             return len(self._task_queue)
 
     @property
+    def queue_snapshot(self) -> list[str]:
+        """当前队列内容快照（供 UI 展示）"""
+        with self._queue_lock:
+            return list(self._task_queue)
+
+    @property
     def progress(self) -> float:
         return 0.0  # 由 StateManager 的 task_runtime_progress 追踪
 
@@ -162,12 +185,44 @@ class RunController:
     #  §5.3 公开方法
     # ═══════════════════════════════════════════════════════════
 
+    def _connect_device(self) -> None:
+        """
+        建立设备连接（§3.1 + §5.3）。
+
+        真实/模拟模式统一入口。连接失败仅告警，不阻塞启动
+        （与 self_check 策略一致：ADB 不通 → 告警但继续）。
+        """
+        if not self._connection:
+            return
+        if not hasattr(self._connection, 'connect'):
+            return
+
+        try:
+            ok = self._connection.connect()
+        except Exception as e:
+            ok = False
+            if self._monitor and hasattr(self._monitor, 'warning'):
+                self._monitor.warning(f"设备连接失败: {e}", module="01-设备连接模块")
+
+        if ok:
+            serial = (getattr(self._connection, 'current_serial', None)
+                      or getattr(self._connection, 'active_device_id', None)
+                      or '')
+            if self._monitor and hasattr(self._monitor, 'info'):
+                self._monitor.info(f"设备连接成功: {serial}", module="01-设备连接模块")
+        else:
+            if self._monitor and hasattr(self._monitor, 'warning'):
+                self._monitor.warning("设备连接失败", module="01-设备连接模块")
+
     def _start_run(self) -> None:
         """
         启动前准备工作（§5.3 _start_run）。
 
-        Step1-Step6：加载配置 → 构建日程 → 恢复进度 → 清空队列 → 设置状态 → 发事件
+        Step0-Step6：建立连接 → 加载配置 → 构建日程 → 恢复进度 → 清空队列 → 设置状态 → 发事件
         """
+        # Step 0: 建立设备连接（真实/模拟统一）
+        self._connect_device()
+
         # Step 1: 加载配置
         if self._scheduler:
             self._scheduler.load_tasks_from_config()
@@ -191,6 +246,10 @@ class RunController:
 
         self._bus.publish(Events.RUN_STARTED, source="09-运行控制中心")
 
+        # 输出可见日志，让 UI 日志面板有反馈
+        if self._monitor and hasattr(self._monitor, 'info'):
+            self._monitor.info("运行已启动", module="09-运行控制中心")
+
     def execute(self) -> None:
         """
         运行入口（§5.3 execute）。
@@ -198,6 +257,9 @@ class RunController:
         Step1→Step8 顺序初始化 → 启动三线程。
         """
         self._start_run()
+
+        # Step 6.5: 启动触发监控（TriggerWatcher，§3.6）
+        self.start_trigger_watcher()
 
         # Step 7: 启动三线程
         self._filler_thread = threading.Thread(
@@ -233,6 +295,9 @@ class RunController:
 
         self._stop_event.set()
         self._paused.set()  # 如果暂停中，先唤醒以便退出
+
+        # 停止触发监控（§3.6）
+        self.stop_trigger_watcher()
 
         # 等待三线程退出
         for t in [self._filler_thread, self._executor_thread, self._scanner_thread]:
@@ -360,12 +425,30 @@ class RunController:
                 next_task = self._scheduler.get_next_task()
                 if next_task:
                     with self._queue_lock:
-                        self._task_queue.append(next_task)
+                        # 去重：已在队列 OR 正在执行中（已 popleft 出队但未 mark_done）→ 不再入队
+                        if next_task in self._task_queue or next_task == self.current_task:
+                            already = True
+                        else:
+                            self._task_queue.append(next_task)
+                            already = False
+                    if already:
+                        # 已在队列中（executor 尚未消化）→ 短暂等待，避免重复入队
+                        self._adaptive_delay()
+                        continue
                     self._idle_counter = 0
+                    # 输出可见日志
+                    if self._monitor and hasattr(self._monitor, 'info'):
+                        self._monitor.info(f"任务已入队: {next_task}", module="09-运行控制中心")
+                    # 通知 UI 队列变化
+                    self._bus.publish(Events.TASK_QUEUED, source="09-运行控制中心",
+                                      task=next_task, queue=list(self._task_queue))
                     continue
 
-            # 无任务 → 自适应休眠
+            # 无任务 → 自适应休眠（每 5 次空闲提示一次，避免刷屏）
             self._idle_counter += 1
+            if self._idle_counter == 5:
+                if self._monitor and hasattr(self._monitor, 'info'):
+                    self._monitor.info("暂无到期任务，调度线程空闲等待", module="09-运行控制中心")
             self._adaptive_delay()
 
     # ── ② 执行线程（§3.1 _executor_loop）───────────────────
@@ -386,12 +469,18 @@ class RunController:
             with self._queue_lock:
                 if self._task_queue:
                     task_name = self._task_queue.popleft()
+                    if task_name:
+                        # 锁内设置 current_task，保证填充线程持锁检查去重时能看到最新值
+                        self.current_task = task_name
 
             if not task_name:
                 time.sleep(0.5)
                 continue
-
-            self.current_task = task_name
+            if self._monitor and hasattr(self._monitor, 'info'):
+                self._monitor.info(f"开始执行任务: {task_name}", module="09-运行控制中心")
+            # 通知 UI 队列/当前任务变化
+            self._bus.publish(Events.TASK_QUEUED, source="09-运行控制中心",
+                              task=task_name, queue=list(self._task_queue))
 
             # §3.6 执行前弹窗扫描
             if self._executor:
@@ -403,6 +492,9 @@ class RunController:
             # mark_done
             if self._scheduler and hasattr(self._scheduler, 'mark_done'):
                 self._scheduler.mark_done(task_name, success)
+            if self._monitor and hasattr(self._monitor, 'info'):
+                self._monitor.info(f"任务执行收尾: {task_name} success={success} → 05.mark_done 已调用",
+                                   module="09-运行控制中心")
 
             # 更新运行时进度
             self._update_task_progress(task_name, success)
@@ -540,7 +632,7 @@ class RunController:
     def _execute_task_once(self, task_name: str) -> bool:
         """单次任务执行（§3.7 + §5.3）
 
-        构造 TaskContext 并注入 executor/recognizer/stop_event 等依赖。
+        构造 TaskContext 并注入 executor/recognizer/stop_event/task_config 等依赖。
         """
         if not self._registry:
             return False
@@ -550,19 +642,72 @@ class RunController:
             if not task:
                 return False
 
+            # 从 Scheduler 取任务配置，注入 context.task_config（设计书 §8.2 约定）
+            task_config: dict[str, Any] = {}
+            if self._scheduler and hasattr(self._scheduler, 'get_config'):
+                cfg = self._scheduler.get_config(task_name)
+                if cfg is not None:
+                    task_config = {
+                        "name": cfg.name,
+                        "display_name": getattr(cfg, 'display_name', '') or cfg.name,
+                        "category": getattr(cfg, 'category', 'daily'),
+                        "priority": getattr(cfg, 'priority', 10),
+                        "max_daily": getattr(cfg, 'max_daily', None),
+                        "max_fail_streak": getattr(cfg, 'max_fail_streak', 10),
+                        "time_start": getattr(cfg, 'time_start', None),
+                        "time_end": getattr(cfg, 'time_end', None),
+                        "time_slots": getattr(cfg, 'time_slots', None),
+                        "team_id": getattr(cfg, 'team_id', None),
+                        "floor": getattr(cfg, 'floor', None),
+                        "execution_mode": getattr(cfg, 'execution_mode', 'daily'),
+                        "repeat": None,
+                        "loop_count": None,
+                    }
+                    repeat = getattr(cfg, 'repeat', None)
+                    if repeat is not None:
+                        task_config["loop_count"] = getattr(repeat, 'loop_count', None)
+                        task_config["repeat"] = {
+                            "type": getattr(repeat, 'type', 'daily'),
+                            "value": getattr(repeat, 'value', None),
+                            "loop_count": getattr(repeat, 'loop_count', None),
+                        }
+
             # 构造 TaskContext（§5.4）
             from tasks.base.task_context import TaskContext
             context = TaskContext(
                 task_id=task_name,
                 task_name=task_name,
+                task_config=task_config,
                 executor=self._executor,
                 recognizer=self._recognizer,
                 stop_event=self._stop_event,
                 timeout=300.0,
                 state=self._state_mgr.get_state("task_runtime_progress", {}) if self._state_mgr else {},
+                # 说明书 04 §BattleLoop：每场战斗结束的进度持久化回调
+                progress_saver=self._on_task_progress,
             )
+
+            # TaskStep 入口类（设计书写法）不经过 BaseTask.run，需补发任务事件
+            from tasks.base.task_step import TaskStep
+            from tasks.base.base_task import BaseTask
+            is_step_entry = isinstance(task, TaskStep) and not isinstance(task, BaseTask)
+            if is_step_entry:
+                self._bus.publish(Events.TASK_STARTED, source="run_controller",
+                                 task_id=task_name, task_name=task_name)
+
             result = task.execute(context)
-            return getattr(result, 'success', False) or getattr(result, 'status', None) == 'success'
+            ok = bool(getattr(result, 'success', False) or getattr(result, 'status', None) == 'success')
+
+            if is_step_entry:
+                if ok:
+                    self._bus.publish(Events.TASK_COMPLETED, source="run_controller",
+                                     task_id=task_name,
+                                     duration=getattr(result, 'duration', 0.0))
+                else:
+                    self._bus.publish(Events.TASK_FAILED, source="run_controller",
+                                     task_id=task_name,
+                                     error=getattr(result, 'message', '') or getattr(result, 'reason', ''))
+            return ok
         except Exception:
             return False
 
@@ -717,18 +862,49 @@ class RunController:
         return data
 
     def _update_task_progress(self, task_name: str, success: bool) -> None:
-        """更新任务运行时进度"""
+        """本轮任务结束 → 重置场次进度（下一轮从 0 开始）
+
+        场次进度由 BattleLoop 每场战斗后维护（_on_task_progress），
+        这里只在任务整轮完成后清空，使下一轮重新从 0 开始。
+        """
+        self._reset_task_progress(task_name)
+
+    def _on_task_progress(self, task_id: str, completed: int, total: int) -> None:
+        """
+        BattleLoop 每场战斗结束回调（说明书 04 §BattleLoop）。
+
+        更新 task_runtime_progress 并立即写盘——异常关闭时
+        最多丢失最近 1 场进度（断点续跑保障）。
+        """
         if not self._state_mgr:
             return
+        try:
+            progress = self._state_mgr.get_state("task_runtime_progress", {})
+            progress[task_id] = {
+                "completed": int(completed),
+                "total": int(total),
+                "updated": datetime.now().isoformat(),
+            }
+            self._state_mgr.set_state("task_runtime_progress", progress)
+            self._save_runtime_progress()
+        except Exception:
+            pass
 
-        progress = self._state_mgr.get_state("task_runtime_progress", {})
-        entry = progress.get(task_name, RuntimeProgress(task_name=task_name))
-        if isinstance(entry, dict):
-            entry = RuntimeProgress(**entry)
-        entry.completed += 1
-        entry.updated = datetime.now().isoformat()
-        progress[task_name] = entry.to_dict() if hasattr(entry, 'to_dict') else entry.__dict__
-        self._state_mgr.set_state("task_runtime_progress", progress)
+    def _reset_task_progress(self, task_name: str) -> None:
+        """本轮任务结束 → 重置场次进度为 0（下一轮从 0 开始）"""
+        if not self._state_mgr:
+            return
+        try:
+            progress = self._state_mgr.get_state("task_runtime_progress", {})
+            entry = progress.get(task_name, {})
+            if isinstance(entry, dict):
+                entry["completed"] = 0
+                entry["updated"] = datetime.now().isoformat()
+            progress[task_name] = entry
+            self._state_mgr.set_state("task_runtime_progress", progress)
+            self._save_runtime_progress()
+        except Exception:
+            pass
 
     # ═══════════════════════════════════════════════════════════
     #  §4.2 自适应休眠
@@ -749,6 +925,31 @@ class RunController:
     # ═══════════════════════════════════════════════════════════
     #  §3.9 暂停/恢复事件处理
     # ═══════════════════════════════════════════════════════════
+
+    def start_trigger_watcher(self) -> None:
+        """
+        启动触发监控（§3.6 + §5.3）。
+
+        收集 Scheduler.get_all_tasks() 中 repeat.type=trigger 的任务
+        及其 trigger_templates 识别列表 → TriggerWatcher.start()。
+        """
+        if not self._trigger_watcher:
+            return
+        trigger_tasks: list[tuple[str, list[str]]] = []
+        if self._scheduler and hasattr(self._scheduler, 'get_all_tasks'):
+            try:
+                for cfg in self._scheduler.get_all_tasks():
+                    if cfg.repeat and cfg.repeat.type == 'trigger':
+                        tmpls = cfg.repeat.trigger_templates or []
+                        trigger_tasks.append((cfg.name, list(tmpls)))
+            except Exception:
+                pass
+        self._trigger_watcher.start(trigger_tasks)
+
+    def stop_trigger_watcher(self) -> None:
+        """停止触发监控（§3.6 + §5.3）。"""
+        if self._trigger_watcher:
+            self._trigger_watcher.stop()
 
     def _on_start(self) -> None:
         """接收 start_requested 事件（§5.3）"""

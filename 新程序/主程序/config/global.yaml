@@ -1,2 +1,7 @@
-# 全局配置
-adb_port: 5555
+_version: 1
+device:
+  adb:
+    host: 127.0.0.1
+    port: 5037
+    timeout: 30.0
+  mock: true

@@ -50,10 +50,14 @@ class TaskGraph:
     """任务步骤图（DAG 执行引擎，§5.3）"""
 
     def __init__(self, max_fail_streak: int = 5):
+        # 说明书 §2.3 要求属性名
         self._nodes: dict[str, GraphNode] = {}
+        self._steps = self._nodes  # 说明书 §2.3 别名
         self._edges: dict[str, list[str]] = {}  # from_step -> [to_step]（依赖顺序）
         self._edge_defs: dict[str, list[Edge]] = {}  # from_step -> [Edge]（完整边定义）
+        self._edges_typed = self._edge_defs  # 说明书 §2.3 别名
         self._entry_step: str = ""
+        self._entry = self._entry_step  # 说明书 §2.3 别名
         self._bus = get_global_bus()
 
         # 熔断状态（§2.3）
@@ -107,6 +111,7 @@ class TaskGraph:
         self._fail_streak = 0
         self.step_result = None
         results: list[StepResult] = []
+        total = len(self._nodes)  # 提前定义，防止 while 不执行时 NameError
 
         # 从入口步骤开始
         current_step_id = self._entry_step
@@ -129,10 +134,6 @@ class TaskGraph:
                 break
 
             self.current_step = current_step_id
-            # 更新进度字符串
-            completed = len([r for r in results if r.status == StepStatus.SUCCESS])
-            total = len(self._nodes)
-            self.task_progress = f"{completed}/{total}"
 
             node = self._nodes.get(current_step_id)
             if not node or not node.step:
@@ -142,6 +143,10 @@ class TaskGraph:
             step_result = self._execute_step(node.step, context)
             results.append(step_result)
             self.step_result = step_result
+
+            # 更新进度字符串（步骤完成后，保证最终步骤显示正确进度）
+            completed = len([r for r in results if r.status == StepStatus.SUCCESS])
+            self.task_progress = f"{completed}/{total}"
 
             # [步骤边界] 失败 → 阶梯式错误恢复（§4.7 + §5.4）
             if step_result.status == StepStatus.FAIL:
@@ -220,26 +225,62 @@ class TaskGraph:
 
         return None
 
+    def _log(self, level: str, message: str, task: str = "") -> None:
+        """模块级日志：发布 LOG_RECORD（UI 日志面板可见），兜底 print"""
+        try:
+            self._bus.publish(Events.LOG_RECORD, source="task_graph", level=level,
+                              message=message, task=task, step=self.current_step)
+        except Exception:
+            print(f"[{level}] {message}")
+
     def _execute_step(self, step: Any, context: Any) -> StepResult:
-        """执行单步（含重试，§5.3 + §5.4）"""
+        """执行单步（含重试，§5.3 + §5.4）。
+        使用 step.run() 确保计时信息被正确设置。
+        """
         max_retries = getattr(step, 'retry_count', 0)
+        step_id = getattr(step, 'step_id', '') or getattr(step, 'name', '')
+        task_name = getattr(context, 'task_id', '') if context else ''
+        self._log("info", f"[04-任务引擎] ▶ 步骤开始: {step_id}", task=task_name)
         for attempt in range(max(1, max_retries + 1)):
             try:
-                if hasattr(step, 'execute'):
-                    result = step.execute(context)
-                else:
-                    result = step.run(context)
+                # 使用 run() 而非 execute()，确保 step_id/duration 被设置
+                result = step.run(context)
+
+                _status = result.status.value if hasattr(result, 'status') else 'unknown'
+                _msg = str(result.message) if getattr(result, 'message', '') else ''
+                self._log("info",
+                          f"[04-任务引擎] 步骤完成: {step_id} → {_status}"
+                          f"{' · ' + _msg if _msg else ''}",
+                          task=task_name)
 
                 self._bus.publish(Events.EXECUTOR_STEP_COMPLETED, source="task_graph",
-                                 step_id=getattr(step, 'step_id', ''),
+                                 step_id=result.step_id or getattr(step, 'step_id', ''),
                                  attempt=attempt,
                                  status=result.status.value if hasattr(result, 'status') else 'unknown')
+
+                # run() 内已将异常转为 FAIL；据此判断是否重试
+                if result.status == StepStatus.FAIL and attempt < max_retries:
+                    self._bus.publish(Events.EXECUTOR_STEP_RETRY, source="task_graph",
+                                     step_id=result.step_id or getattr(step, 'step_id', ''),
+                                     attempt=attempt, error=result.message)
+                    time.sleep(1)
+                    continue
+
+                if result.status == StepStatus.FAIL:
+                    # 最后一次尝试失败后调用 cleanup
+                    if hasattr(step, 'cleanup'):
+                        try:
+                            step.cleanup(context)
+                        except Exception:
+                            pass
+
                 return result
 
             except TaskInterrupted:
                 raise
 
             except Exception as e:
+                # run() 理论上会捕获所有异常，此处为兜底
                 if attempt < max_retries:
                     self._bus.publish(Events.EXECUTOR_STEP_RETRY, source="task_graph",
                                      step_id=getattr(step, 'step_id', ''),
@@ -247,7 +288,6 @@ class TaskGraph:
                     time.sleep(1)
                     continue
 
-                # 最后一次尝试失败后调用 cleanup
                 if hasattr(step, 'cleanup'):
                     try:
                         step.cleanup(context)
