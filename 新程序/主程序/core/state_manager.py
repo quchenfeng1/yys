@@ -31,6 +31,7 @@ from typing import Any, Optional
 from core.event_bus import EventBus, get_global_bus
 from core.events import Events
 from core.exceptions import StateError, StateKeyNotFoundError
+from core.state_schema import StateKeys
 
 
 class StateManager:
@@ -47,6 +48,9 @@ class StateManager:
         self._state = self._store  # 说明书 §2.3 要求名
         self._event_bus = event_bus or get_global_bus()
         self._bus = self._event_bus  # 兼容别名
+
+        # 场景感知：订阅 scene_updated（14-执行器 detect_scene/probe_scene 命中发布）
+        self._bus.subscribe(Events.SCENE_UPDATED, self._on_scene_updated)
 
         # §4.3 非持久化：persist 为可选功能，默认关闭
         self._persist_path = Path(persist_path) if persist_path else None
@@ -160,6 +164,27 @@ class StateManager:
             if prefix:
                 return {k: v for k, v in self._store.items() if k.startswith(prefix)}
             return dict(self._store)
+
+    # ── 场景感知（§2.2 场景状态 + 说明书 07）────────────────
+
+    def set_current_scene(self, name: str | None) -> None:
+        """设置当前场景：写 current_scene；name 非 None 时同步写 last_known_scene。"""
+        self.set_state(StateKeys.CURRENT_SCENE, name)
+        if name:
+            self.set_state(StateKeys.LAST_KNOWN_SCENE, name)
+
+    def get_current_scene(self) -> str | None:
+        """读取当前场景名（current_scene）。"""
+        return self.get(StateKeys.CURRENT_SCENE)
+
+    def get_last_known_scene(self) -> str | None:
+        """读取最后已知场景名（last_known_scene），供 09 误触/弹窗后恢复定位。"""
+        return self.get(StateKeys.LAST_KNOWN_SCENE)
+
+    def _on_scene_updated(self, scene=None, **kw) -> None:
+        """场景感知命中（14-执行器 发布 scene_updated）→ 维护 current_scene/last_known_scene。"""
+        if scene:
+            self.set_current_scene(str(scene))
 
     # ── 校验器 ────────────────────────────────────────────────
 

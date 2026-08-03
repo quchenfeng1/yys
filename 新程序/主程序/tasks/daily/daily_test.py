@@ -61,6 +61,7 @@ class DetectHome(TaskStep):
     """步骤1 识别主界面 → 02-图像识别模块"""
     is_generic = False
     timeout = 20
+    scene_probe = ["common/scene/home"]  # 场景感知：步骤前静默确认主界面位置
 
     def execute(self, context=None):
         tid = _task_id(context)
@@ -82,6 +83,7 @@ class ClickButton(TaskStep):
     """步骤2 点击按钮 → 14-执行器(→02→03→01)"""
     is_generic = False
     timeout = 20
+    scene_probe = ["common/scene/home"]  # 场景感知：步骤前确认仍在主界面
 
     def execute(self, context=None):
         tid = _task_id(context)

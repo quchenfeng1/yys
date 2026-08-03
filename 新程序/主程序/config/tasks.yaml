@@ -21,13 +21,13 @@ tasks:
   id: once_test
   display_name: 单次测试
   category: special
-  enabled: false
+  enabled: true
   priority: 10
-  time_start: 06:00
-  time_end: '23:59'
+  time_start: null
+  time_end: null
   max_daily: null
   repeat:
-    type: once
+    type: on_enter
     value: 1
     loop_count: 1
   active_range: null
@@ -39,7 +39,7 @@ tasks:
   id: combat_test
   display_name: 战斗测试
   category: special
-  enabled: false
+  enabled: true
   priority: 10
   time_start: 06:00
   time_end: '23:59'
@@ -65,3 +65,40 @@ tasks:
   lock_team: true
   change_team: true
   stamina_required: 0
+- name: manual_trigger_test
+  id: manual_trigger_test
+  display_name: 手动触发测试
+  category: special
+  enabled: true
+  priority: 10
+  time_start: null
+  time_end: null
+  max_daily: null
+  repeat:
+    type: trigger
+    value: 1
+  active_range: null
+  total_count: null
+  execution_mode: daily
+  loop_count: 1
+  time_slots: null
+- name: image_trigger_test
+  id: image_trigger_test
+  display_name: 识图触发测试
+  category: special
+  enabled: true
+  priority: 10
+  time_start: null
+  time_end: null
+  max_daily: null
+  repeat:
+    type: trigger
+    value: 1
+    trigger_templates:
+    - trigger/image_entry_a
+    - trigger/image_entry_b
+  active_range: null
+  total_count: null
+  execution_mode: daily
+  loop_count: 1
+  time_slots: null

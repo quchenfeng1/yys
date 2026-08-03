@@ -74,6 +74,9 @@ class Executor:
         # §2.3 上一次操作记录
         self._last_operation: LastOperation | None = None
 
+        # 场景感知：上次感知到的场景（去重发布 scene_updated）
+        self._last_scene: str | None = None
+
         # 设备操作回调（兼容旧版 set_click_handler）
         self._click_handler: Callable[[int, int], bool] | None = None
         self._swipe_handler: Callable[[int, int, int, int, float], bool] | None = None
@@ -321,12 +324,13 @@ class Executor:
         遍历候选场景模板，返回最先匹配的场景名（§5.4 + §5.3）。
 
         支持 timeout 重复检测直到超时。
-        全部候选均未匹配时发布 scene_unknown 事件（§5.5）。
+        命中后发布 scene_updated（去重）；全部候选均未匹配时发布 scene_unknown 事件（§5.5）。
         """
         start_time = time.time()
         while True:
             for c in candidates:
                 if self._recognizer.exists(c):
+                    self._publish_scene(c)
                     return c
 
             if timeout is not None and timeout > 0:
@@ -339,6 +343,33 @@ class Executor:
                 self._bus.publish(Events.SCENE_UNKNOWN, source="executor",
                                  candidates=candidates)
                 return None
+
+    def probe_scene(self, candidates: list[str], timeout: float | None = None) -> str | None:
+        """
+        静默场景感知：遍历候选场景模板，命中返回场景名并发布 scene_updated；
+        未命中返回 None（不发布 scene_unknown）。供场景感知步骤 scene_probe / 运行时定位。
+        """
+        start_time = time.time()
+        while True:
+            for c in candidates:
+                if self._recognizer.exists(c):
+                    self._publish_scene(c)
+                    return c
+            if timeout is not None and timeout > 0:
+                if time.time() - start_time > timeout:
+                    return None
+                self._anti_detect.sleep(0.3, 0.1, None)
+            else:
+                return None
+
+    def _publish_scene(self, scene: str) -> None:
+        """场景感知命中 → 去重发布 scene_updated（07 订阅维护 current_scene/last_known_scene）。"""
+        if scene and scene != self._last_scene:
+            self._last_scene = scene
+            try:
+                self._bus.publish(Events.SCENE_UPDATED, source="executor", scene=scene)
+            except Exception:
+                pass
 
     def ensure_scene(self, name: str, timeout: float = 30.0) -> bool:
         """确保场景出现（§5.3）"""

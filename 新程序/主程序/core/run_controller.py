@@ -941,7 +941,9 @@ class RunController:
                 for cfg in self._scheduler.get_all_tasks():
                     if cfg.repeat and cfg.repeat.type == 'trigger':
                         tmpls = cfg.repeat.trigger_templates or []
-                        trigger_tasks.append((cfg.name, list(tmpls)))
+                        # 只监控配置了触发模板的任务（无模板=仅手动触发，不启动监控）
+                        if tmpls:
+                            trigger_tasks.append((cfg.name, list(tmpls)))
             except Exception:
                 pass
         self._trigger_watcher.start(trigger_tasks)

@@ -1,70 +1,167 @@
 """
-UI 子面板：TaskQueuePanel 任务队列面板（四区布局）。
+UI 子面板：TaskQueuePanel 任务队列面板（四区布局，卡片样式）。
 
-上方：正在执行的任务
+上方：正在执行的任务（大卡片）
 下方：待执行（到期队列） | 未开始（未到时间） | 已失效（过期/待配置）
+每个列表项为 TaskCard 卡片：优先级徽章 + 名称 + 副信息 + 可选操作按钮。
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QProgressBar,
-    QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QFrame, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QProgressBar, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
+
+# 优先级色阶（11-用户界面模块 §3.2）
+_PRIORITY_COLORS = {
+    1: "#e53935", 2: "#fb8c00", 3: "#fdd835", 5: "#43a047",
+    10: "#1e88e5", 20: "#8e24aa", 99: "#9e9e9e",
+}
+_DEFAULT_BADGE = "#9e9e9e"
+_CARD_HEIGHT = 62
+
+# 面板全局样式（卡片 + 列表）
+_PANEL_QSS = """
+QFrame#TaskCard {
+    background: #fbfbfd;
+    border: 1px solid #d8dbe0;
+    border-radius: 8px;
+}
+QFrame#TaskCard:hover { background: #f0f5ff; border-color: #4a90d9; }
+QLabel#card_title { font-size: 13px; font-weight: bold; color: #222; background: transparent; }
+QLabel#card_sub   { font-size: 11px; color: #888; background: transparent; }
+QListWidget {
+    background: transparent;
+    border: none;
+}
+QGroupBox {
+    font-size: 12px; font-weight: bold; color: #333;
+    border: 1px solid #c8ccd4; border-radius: 8px;
+    margin-top: 12px; padding-top: 4px;
+    background: #f7f8fa;
+}
+QGroupBox::title {
+    subcontrol-origin: margin; left: 10px; padding: 0 4px;
+    background: #f7f8fa; color: #333;
+}
+QFrame#CurrentCard {
+    background: #eef7ee;
+    border: 1px solid #4CAF50;
+    border-radius: 10px;
+}
+QPushButton {
+    border: 1px solid #1e88e5; border-radius: 6px; background: #e8f1fc;
+    color: #1565c0; padding: 2px 8px; font-size: 11px;
+}
+QPushButton:hover { background: #d4e6fb; }
+"""
+
+
+class TaskCard(QFrame):
+    """任务卡片：优先级徽章 + 名称 + 副信息 + 可选操作按钮"""
+
+    def __init__(
+        self,
+        title: str = "",
+        sub: str = "",
+        badge_text: str | None = None,
+        badge_color: str | None = None,
+        action_text: str | None = None,
+        on_action: Callable[[], None] | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setObjectName("TaskCard")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(9, 5, 9, 5)
+        lay.setSpacing(2)
+
+        # 第一行：徽章 + 标题 + 操作按钮
+        row = QHBoxLayout()
+        row.setSpacing(7)
+        if badge_text:
+            badge = QLabel(badge_text)
+            badge.setObjectName("card_badge")
+            badge.setStyleSheet(
+                f"color:#fff; border-radius:8px; padding:1px 7px; font-size:10px; "
+                f"background:{badge_color or _DEFAULT_BADGE};")
+            row.addWidget(badge)
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("card_title")
+        row.addWidget(title_lbl, 1)
+        if action_text and on_action is not None:
+            btn = QPushButton(action_text)
+            btn.setMaximumWidth(64)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _=False: on_action())
+            row.addWidget(btn)
+        lay.addLayout(row)
+
+        # 第二行：副信息
+        if sub:
+            sub_lbl = QLabel(sub)
+            sub_lbl.setObjectName("card_sub")
+            lay.addWidget(sub_lbl)
 
 
 class TaskQueuePanel(QWidget):
-    """任务队列面板（四区）"""
+    """任务队列面板（四区，卡片样式）"""
 
     # 手动触发触发式任务（trigger）——由 MainWindow 连接 TaskBridge.update_next_run
     manual_trigger_requested = pyqtSignal(str)
 
-
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setStyleSheet(_PANEL_QSS)
         layout = QVBoxLayout(self)
+        layout.setSpacing(6)
         layout.addWidget(QLabel("任务队列"))
 
-        # ── 上方：正在执行 ──────────────────────────────────
+        # ── 上方：正在执行（大卡片） ───────────────────────
         current_frame = QFrame()
-        current_frame.setFrameShape(QFrame.StyledPanel)
+        current_frame.setObjectName("CurrentCard")
         cur_layout = QVBoxLayout(current_frame)
+        cur_layout.setContentsMargins(10, 8, 10, 8)
         cur_layout.addWidget(QLabel("▶ 正在执行"))
         self.current_label = QLabel("（无）")
         self.current_label.setStyleSheet(
-            "font-size:16px; font-weight:bold; color:#4CAF50; padding:8px;")
+            "font-size:16px; font-weight:bold; color:#2e7d32; padding:6px;")
         self.current_label.setWordWrap(True)
         cur_layout.addWidget(self.current_label)
         layout.addWidget(current_frame)
 
-        # ── 下方：待执行 / 未开始 / 已失效（三栏） ────────
+        # ── 下方：待执行 / 未开始 / 已失效（三栏卡片列表） ──
         splitter = QSplitter(Qt.Horizontal)
 
-        # 左：待执行
-        left = QWidget()
-        ll = QVBoxLayout(left)
-        ll.addWidget(QLabel("⏳ 待执行"))
+        # 左：待执行（容器框）
+        left_box = QGroupBox("⏳ 待执行")
+        ll = QVBoxLayout(left_box)
+        ll.setSpacing(4)
         self.pending_list = QListWidget()
+        self.pending_list.setSpacing(4)
         ll.addWidget(self.pending_list)
-        splitter.addWidget(left)
+        splitter.addWidget(left_box)
 
-        # 中：未开始
-        middle = QWidget()
-        ml = QVBoxLayout(middle)
-        ml.addWidget(QLabel("🕐 未开始"))
+        # 中：未开始（容器框）
+        middle_box = QGroupBox("🕐 未开始")
+        ml = QVBoxLayout(middle_box)
+        ml.setSpacing(4)
         self.upcoming_list = QListWidget()
+        self.upcoming_list.setSpacing(4)
         ml.addWidget(self.upcoming_list)
-        splitter.addWidget(middle)
+        splitter.addWidget(middle_box)
 
-        # 右：已失效
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.addWidget(QLabel("⚠ 已失效"))
+        # 右：已失效（容器框）
+        right_box = QGroupBox("⚠ 已失效")
+        rl = QVBoxLayout(right_box)
+        rl.setSpacing(4)
         self.invalid_list = QListWidget()
+        self.invalid_list.setSpacing(4)
         rl.addWidget(self.invalid_list)
-        splitter.addWidget(right)
+        splitter.addWidget(right_box)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -86,6 +183,29 @@ class TaskQueuePanel(QWidget):
         self._set_upcoming(upcoming)
         self._set_invalid(invalid or [])
 
+    # ── 卡片渲染辅助 ─────────────────────────────────────
+
+    @staticmethod
+    def _badge_color(priority: Any) -> str:
+        try:
+            return _PRIORITY_COLORS.get(int(priority), _DEFAULT_BADGE)
+        except (TypeError, ValueError):
+            return _DEFAULT_BADGE
+
+    @staticmethod
+    def _add_card(lw: QListWidget, title: str = "", sub: str = "",
+                  badge_text: str | None = None, badge_color: str | None = None,
+                  action_text: str | None = None,
+                  on_action: Callable[[], None] | None = None) -> None:
+        """向列表添加一张任务卡片"""
+        li = QListWidgetItem()
+        li.setSizeHint(QSize(0, _CARD_HEIGHT))
+        card = TaskCard(title=title, sub=sub, badge_text=badge_text,
+                        badge_color=badge_color, action_text=action_text,
+                        on_action=on_action)
+        lw.addItem(li)
+        lw.setItemWidget(li, card)
+
     def _set_invalid(self, invalid: list) -> None:
         self.invalid_list.clear()
         for item in invalid:
@@ -93,22 +213,37 @@ class TaskQueuePanel(QWidget):
                 name = item.get("name", "")
                 status = item.get("status", "")
                 detail = item.get("detail", "")
-                text = f"{name}  [{status}]"
-                if detail:
-                    text += f"  · {detail}"
-                self.invalid_list.addItem(text)
+                color = _DEFAULT_BADGE
+                if status in ("已过期",):
+                    color = "#9e9e9e"
+                elif status in ("待配置",):
+                    color = "#fb8c00"
+                elif status in ("待触发", "等待下次触发"):
+                    color = "#1e88e5"
+                    # 触发式任务：已失效区也可手动触发（未触发/已执行完统一在此区）
+                    self._add_card(
+                        self.invalid_list, title=f"⚡ {name}", sub=detail or "",
+                        badge_text=status, badge_color=color,
+                        action_text="⚡触发",
+                        on_action=lambda n=name: self.manual_trigger_requested.emit(n),
+                    )
+                    continue
+                elif status in ("已跳过",):
+                    color = "#e53935"
+                self._add_card(self.invalid_list, title=name, sub=detail or "",
+                               badge_text=status, badge_color=color)
             else:
-                self.invalid_list.addItem(str(item))
+                self._add_card(self.invalid_list, title=str(item))
 
     def _set_current(self, task: str) -> None:
         if task:
             self.current_label.setText(task)
             self.current_label.setStyleSheet(
-                "font-size:16px; font-weight:bold; color:#4CAF50; padding:8px;")
+                "font-size:16px; font-weight:bold; color:#2e7d32; padding:6px;")
         else:
             self.current_label.setText("（无）")
             self.current_label.setStyleSheet(
-                "font-size:16px; color:#888; padding:8px;")
+                "font-size:15px; color:#aaa; padding:6px;")
 
     def _set_pending(self, pending: list) -> None:
         self.pending_list.clear()
@@ -116,9 +251,16 @@ class TaskQueuePanel(QWidget):
             if isinstance(item, dict):
                 name = item.get("name", str(item))
                 nrt = item.get("next_run", "")
-                self.pending_list.addItem(f"{name}  ({nrt})" if nrt else name)
+                pri = item.get("priority")
+                badge = f"P{int(pri)}" if pri else None
+                sub = f"⏱ {nrt}" if nrt else "等待执行"
+                self._add_card(
+                    self.pending_list, title=name, sub=sub,
+                    badge_text=badge,
+                    badge_color=self._badge_color(pri) if pri else None,
+                )
             else:
-                self.pending_list.addItem(str(item))
+                self._add_card(self.pending_list, title=str(item))
 
     def _set_upcoming(self, upcoming: list) -> None:
         self.upcoming_list.clear()
@@ -126,34 +268,26 @@ class TaskQueuePanel(QWidget):
             if isinstance(item, dict):
                 name = item.get("name", "")
                 nrt = item.get("next_run", "")
-                is_trigger = not nrt  # 无 next_run → 触发式任务（待触发）
-                if is_trigger:
-                    # 触发式任务：显示"待触发" + 手动触发按钮
-                    li = QListWidgetItem(f"⚡ {name}  [待触发]")
-                    li.setData(Qt.UserRole, name)
-                    self.upcoming_list.addItem(li)
-                    idx = self.upcoming_list.count() - 1
-                    row = QWidget()
-                    h = QHBoxLayout(row)
-                    h.setContentsMargins(6, 2, 6, 2)
-                    lbl = QLabel(f"⚡ {name}  [待触发]")
-                    btn = QPushButton("⚡触发")
-                    btn.setMaximumWidth(64)
-                    btn.setToolTip("手动触发：立即加入执行队列")
-                    btn.clicked.connect(
-                        lambda _=False, n=name: self.manual_trigger_requested.emit(n))
-                    h.addWidget(lbl, 1)
-                    h.addWidget(btn)
-                    self.upcoming_list.setItemWidget(li, row)
+                if not nrt:
+                    # 触发式任务：待触发 + 手动触发按钮
+                    self._add_card(
+                        self.upcoming_list, title=f"⚡ {name}", sub="等待外部触发",
+                        badge_text="待触发", badge_color="#1e88e5",
+                        action_text="⚡触发",
+                        on_action=lambda n=name: self.manual_trigger_requested.emit(n),
+                    )
                 else:
-                    self.upcoming_list.addItem(f"{name}  ({nrt})")
+                    self._add_card(
+                        self.upcoming_list, title=name, sub=f"⏱ {nrt}",
+                        badge_text="未开始", badge_color="#1e88e5",
+                    )
             else:
-                self.upcoming_list.addItem(str(item))
+                self._add_card(self.upcoming_list, title=str(item))
 
     # ── 兼容旧方法（MainWindow 现有调用） ─────────────────
 
     def add_task(self, task_id: str, name: str) -> None:
-        self.pending_list.addItem(f"{name} ({task_id})")
+        self._add_card(self.pending_list, title=name, sub=task_id)
 
     def clear(self) -> None:
         self.pending_list.clear()

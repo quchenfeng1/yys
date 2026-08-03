@@ -31,11 +31,17 @@ def main():
     s._tasks["trig_test"] = cfg
     s.load_state()
 
-    # ① 初始无 next_run
+    # ① 初始无 next_run（未触发 → 已失效区「待触发」置顶，不进未开始）
     nrt = s._calc_initial_next_run(cfg)
     assert nrt is None, f"got {nrt}"
     assert "trig_test" not in s._next_run
-    print("① PASS 初始无 next_run（等待触发）")
+    up = [x["name"] for x in s.get_upcoming()]
+    assert "trig_test" not in up, f"未触发不应在未开始区: {up}"
+    inv = s.get_invalid_tasks()
+    entry = [x for x in inv if x["name"] == "trig_test"]
+    assert entry and entry[0]["status"] == "待触发", f"got {entry}"
+    assert inv[0]["name"] == "trig_test", f"trigger 应置顶: {inv}"
+    print("① PASS 初始无 next_run → 已失效区「待触发」并置顶")
 
     # ② 手动触发 → 入队
     s.update_next_run("trig_test", datetime.now(s._timezone))
@@ -49,12 +55,13 @@ def main():
     assert "trig_test" not in s._next_run
     print("③ PASS mark_done → COMPLETED + 清空 next_run")
 
-    # ④ 已失效标注
+    # ④ 已失效标注（执行完 → 等待下次触发，仍置顶）
     inv = s.get_invalid_tasks()
     entry = [x for x in inv if x["name"] == "trig_test"]
     assert entry and entry[0]["status"] == "等待下次触发", f"got {entry}"
     assert entry[0]["detail"] == "外部触发后重新激活", f"got {entry}"
-    print("④ PASS 已失效区标注 [等待下次触发] · 外部触发后重新激活")
+    assert inv[0]["name"] == "trig_test", f"trigger 应置顶: {inv}"
+    print("④ PASS 已失效区标注 [等待下次触发] · 外部触发后重新激活（置顶）")
 
     # ⑤ 事件触发
     bus.publish("trigger_detected", source="trigger_watcher", task_name="trig_test")

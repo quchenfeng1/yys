@@ -1,7 +1,55 @@
 {
   "daily_test": {
     "task_name": "daily_test",
-    "next_run_time": "2026-08-01T06:00:00+08:00",
+    "next_run_time": "2026-08-04T06:00:00+08:00",
+    "today_count": 7,
+    "total_count": 7,
+    "window_start": "",
+    "fail_streak": 0,
+    "last_done": "",
+    "last_status": "",
+    "skip_reason": "",
+    "updated": "2026-08-03T16:11:39.515878+08:00"
+  },
+  "once_test": {
+    "task_name": "once_test",
+    "next_run_time": "",
+    "today_count": 8,
+    "total_count": 8,
+    "window_start": "",
+    "fail_streak": 0,
+    "last_done": "",
+    "last_status": "",
+    "skip_reason": "",
+    "updated": "2026-08-03T16:11:39.515878+08:00"
+  },
+  "combat_test": {
+    "task_name": "combat_test",
+    "next_run_time": "2026-08-04T06:00:00+08:00",
+    "today_count": 1,
+    "total_count": 1,
+    "window_start": "",
+    "fail_streak": 0,
+    "last_done": "",
+    "last_status": "",
+    "skip_reason": "",
+    "updated": "2026-08-03T16:11:39.515878+08:00"
+  },
+  "manual_trigger_test": {
+    "task_name": "manual_trigger_test",
+    "next_run_time": "",
+    "today_count": 1,
+    "total_count": 1,
+    "window_start": "",
+    "fail_streak": 0,
+    "last_done": "",
+    "last_status": "",
+    "skip_reason": "",
+    "updated": "2026-08-03T16:11:39.515878+08:00"
+  },
+  "image_trigger_test": {
+    "task_name": "image_trigger_test",
+    "next_run_time": "",
     "today_count": 3,
     "total_count": 3,
     "window_start": "",
@@ -9,6 +57,6 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-07-31T16:37:27.789922+08:00"
+    "updated": "2026-08-03T16:11:39.515878+08:00"
   }
 }

@@ -281,6 +281,7 @@ class MainWindow(QMainWindow):
 
         # 场景/素材
         self._bus.subscribe(Events.SCENE_UNKNOWN, self._on_scene_unknown)
+        self._bus.subscribe(Events.SCENE_UPDATED, self._on_scene_updated)
         self._bus.subscribe(Events.ASSETS_MISSING, self._on_assets_missing)
 
         # 启动检查
@@ -396,11 +397,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         # 合并去重：运行时队列优先，再补调度 DUE 任务
-        pending = list(runtime_q)
+        # 关键：正在执行的任务（current）只显示在「正在执行」区，不进「待执行」区
+        # （执行中任务的 next_run 尚未被 mark_done 清空，调度器仍判定其到期）
+        pending = [n for n in runtime_q if n != current]
         for d in due:
             name = d.get("name", str(d)) if isinstance(d, dict) else str(d)
-            if name not in pending:
-                pending.append(d)
+            if name == current or name in pending:
+                continue
+            pending.append(d)
         self.ui_update.emit(lambda: panel.update_panel(current, pending, upcoming, invalid))
 
     def _on_manual_trigger(self, task_name: str) -> None:
@@ -463,9 +467,8 @@ class MainWindow(QMainWindow):
         """（主线程）日程刷新"""
         if hasattr(self.status_bar, 'update_queue_length'):
             self.status_bar.update_queue_length(len(queue))
-        queue_panel = self.panels.get("task_queue")
-        if queue_panel and hasattr(queue_panel, 'refresh_queue'):
-            queue_panel.refresh_queue(queue)
+        # 队列三区统一由 _refresh_queue_panel 重建（含"正在执行任务排除"），
+        # 不再直接 refresh_queue，避免执行中任务闪现进待执行区
         self._refresh_queue_panel()
 
     def _on_log_record(self, **kw: Any) -> None:
@@ -480,6 +483,12 @@ class MainWindow(QMainWindow):
 
     def _on_scene_unknown(self, **kw: Any) -> None:
         self.ui_update.emit(lambda: self.log_panel.append_log(level="WARNING", message="未知场景"))
+
+    def _on_scene_updated(self, **kw: Any) -> None:
+        """场景感知命中（scene_updated）→ 状态栏显示当前场景"""
+        scene = kw.get("scene", "")
+        self.ui_update.emit(
+            lambda: self.status_bar.update_current_scene(scene) if self.status_bar else None)
 
     def _on_assets_missing(self, **kw: Any) -> None:
         self.ui_update.emit(lambda: self.log_panel.append_log(level="WARNING", message="素材缺失"))

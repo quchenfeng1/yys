@@ -116,6 +116,7 @@ class Events:
 
     # ── 场景事件 scene ──────────────────────────────────────
     SCENE_UNKNOWN: Final[str] = "scene_unknown"
+    SCENE_UPDATED: Final[str] = "scene_updated"  # 场景感知命中（detect_scene/probe_scene），07 维护 current_scene、11 显示当前场景
 
     # ── 应用事件 app ────────────────────────────────────────
     APP_STARTED: Final[str] = "app_started"

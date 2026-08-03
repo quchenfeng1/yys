@@ -33,6 +33,9 @@ class StatusBar(QWidget):
         self.task_label = QLabel("")
         self.task_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
 
+        self.scene_label = QLabel("")
+        self.scene_label.setStyleSheet("color: #1e88e5;")
+
         self.connection_label = QLabel("")
         self.account_label = QLabel("")
         self.duration_label = QLabel("")
@@ -50,6 +53,7 @@ class StatusBar(QWidget):
 
         layout.addWidget(self.status_label, 0)
         layout.addWidget(self.task_label, 1)
+        layout.addWidget(self.scene_label, 0)
         layout.addWidget(self.connection_label, 0)
         layout.addWidget(self.account_label, 0)
         layout.addWidget(self.duration_label, 0)
@@ -85,6 +89,10 @@ class StatusBar(QWidget):
             self.task_label.setText(f"当前: {task_name}")
         else:
             self.task_label.setText("")
+
+    def update_current_scene(self, scene: str | None) -> None:
+        """更新当前场景显示（§3.7 第10项，scene_updated 驱动）"""
+        self.scene_label.setText(f"场景: {scene}" if scene else "")
 
     def update_connection(self, status: str) -> None:
         """更新连接状态显示（§3.7 第3项）"""

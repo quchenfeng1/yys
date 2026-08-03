@@ -225,6 +225,23 @@ class TaskGraph:
 
         return None
 
+    def _probe_scene(self, context: Any, step: Any) -> None:
+        """场景感知步骤（§4.9 scene_probe）：步骤执行前静默探测当前位置。
+
+        仅当步骤声明 scene_probe 且执行器支持 probe_scene 时生效；
+        素材缺失/异常/未声明 → 静默跳过，零影响。
+        """
+        probe = getattr(step, 'scene_probe', None)
+        if not probe:
+            return
+        executor = getattr(context, 'executor', None) if context else None
+        if executor is None or not hasattr(executor, 'probe_scene'):
+            return
+        try:
+            executor.probe_scene(list(probe), timeout=0)
+        except Exception:
+            pass
+
     def _log(self, level: str, message: str, task: str = "") -> None:
         """模块级日志：发布 LOG_RECORD（UI 日志面板可见），兜底 print"""
         try:
@@ -237,6 +254,9 @@ class TaskGraph:
         """执行单步（含重试，§5.3 + §5.4）。
         使用 step.run() 确保计时信息被正确设置。
         """
+        # [场景感知] 步骤声明 scene_probe → 静默探测当前位置（§4.9，零影响）
+        self._probe_scene(context, step)
+
         max_retries = getattr(step, 'retry_count', 0)
         step_id = getattr(step, 'step_id', '') or getattr(step, 'name', '')
         task_name = getattr(context, 'task_id', '') if context else ''

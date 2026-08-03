@@ -1,6 +1,23 @@
 {
   "daily_test": {
     "completed": 0,
-    "updated": "2026-07-31T16:37:27.793824"
+    "updated": "2026-08-03T10:18:05.626954"
+  },
+  "combat_test": {
+    "completed": 0,
+    "total": 5,
+    "updated": "2026-08-03T09:39:26.574976"
+  },
+  "once_test": {
+    "completed": 0,
+    "updated": "2026-08-03T16:10:58.690539"
+  },
+  "manual_trigger_test": {
+    "completed": 0,
+    "updated": "2026-08-03T10:52:27.064172"
+  },
+  "image_trigger_test": {
+    "completed": 0,
+    "updated": "2026-08-03T16:11:39.518926"
   }
 }

@@ -70,6 +70,10 @@ NEEDED_TEMPLATES = {
     "common/scene/home": (180, 100),
     "common/ui/test_button": (140, 60),
     "common/ui/back_btn": (120, 60),
+    # once_test 三步链路引用（进入领奖界面→领取每日奖励→返回主界面）
+    "common/award/award_entry": (150, 60),
+    "common/award/award_panel": (180, 100),
+    "common/award/daily_reward_btn": (150, 60),
     # 短场景名（task_graph.detect_scene 使用，非完整路径）
     "courtyard": (180, 100),
     "battle": (180, 100),

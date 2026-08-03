@@ -715,9 +715,12 @@ class Scheduler:
                 if reason:
                     result.append({
                         "name": name,
-                        "status": reason,  # 已过期 / 本轮已完成
+                        "status": reason,  # 已过期/本轮已完成/待触发/等待下次触发
                         "detail": self._invalid_detail(cfg),
                     })
+            # trigger 相关（待触发 / 等待下次触发）置顶
+            result.sort(key=lambda x: (
+                0 if x["status"] in ("待触发", "等待下次触发") else 1, x["name"]))
             return result
 
     def _invalid_reason(self, config: TaskConfig, now: datetime, today_str: str) -> str | None:
@@ -736,13 +739,17 @@ class Scheduler:
         if (config.repeat and config.repeat.type == "expire_at"
                 and config.repeat.expire_at and today_str > config.repeat.expire_at):
             return "已过期"
-        # ④ next_run 已被清空（调度器标记永久完成 / on_enter / trigger 本轮完成）
+        # ④ trigger 任务：无 next_run = 等待触发（未触发 或 已执行完，统一归入已失效）
+        if (config.repeat and config.repeat.type == 'trigger'
+                and name not in self._next_run):
+            if self.task_status.get(name) == ScheduleStatus.COMPLETED:
+                return "等待下次触发"
+            return "待触发"
+        # ⑤ next_run 已被清空（调度器标记永久完成 / on_enter 本轮完成）
         if (self.task_status.get(name) == ScheduleStatus.COMPLETED
                 and name not in self._next_run):
             if config.repeat and config.repeat.type == 'on_enter':
                 return "本轮已完成"
-            if config.repeat and config.repeat.type == 'trigger':
-                return "等待下次触发"
             return "已过期"
         return None
 
@@ -752,7 +759,9 @@ class Scheduler:
         if config.repeat and config.repeat.type == 'on_enter':
             return "下次启动执行"
         if config.repeat and config.repeat.type == 'trigger':
-            return "外部触发后重新激活"
+            if self.task_status.get(name) == ScheduleStatus.COMPLETED:
+                return "外部触发后重新激活"
+            return "等待外部触发（按钮/识图）"
         if config.total_count is not None:
             return f"累计 {self._total_count.get(name, 0)}/{config.total_count} 次已完成"
         if config.active_range and len(config.active_range) > 1:
@@ -978,6 +987,13 @@ class Scheduler:
                         next_time = rule.calc_next_run(last_run)
                         # once 类型或已过期 → 标记 completed
                         sentinel = datetime.max.replace(tzinfo=self._timezone)
+                        # ★ 确保推进到 now 之后（防止 next_run 积压多天后当天反复执行）：
+                        #   例如 next_run 停在 08-01，今天 08-03 才运行，+1 天仍是过去
+                        #   → 继续推进跳过积压天数，当天只执行一次
+                        for _ in range(10):
+                            if next_time == sentinel or next_time == datetime.max or next_time > now:
+                                break
+                            next_time = rule.calc_next_run(next_time)
                         if next_time == sentinel or next_time == datetime.max:
                             self.task_status[task_name] = ScheduleStatus.COMPLETED
                             self._next_run.pop(task_name, None)
@@ -985,7 +1001,7 @@ class Scheduler:
                             self._next_run[task_name] = next_time
                             self.task_status[task_name] = ScheduleStatus.WAITING
                     else:
-                        # 无 repeat 配置 → 默认 daily
+                        # 无 repeat 配置 → 默认 daily（确保未来）
                         self._next_run[task_name] = now + timedelta(days=1)
 
                     # 已达每日上限则标记 completed（next_run 已推进，次日重置恢复）
@@ -1022,7 +1038,16 @@ class Scheduler:
         # 持锁外持久化 + 发布事件
         _st = self.task_status.get(task_name, ScheduleStatus.WAITING)
         _nrt = self._next_run.get(task_name)
-        _nrt_s = _nrt.strftime("%m-%d %H:%M") if _nrt else "无(等待外部触发)"
+        if _nrt:
+            _nrt_s = _nrt.strftime("%m-%d %H:%M")
+        else:
+            _rtype = (config.repeat.type if config.repeat else '')
+            if _rtype == 'on_enter':
+                _nrt_s = "无(下次启动执行)"
+            elif _rtype == 'trigger':
+                _nrt_s = "无(等待外部触发)"
+            else:
+                _nrt_s = "无"
         self._log("info",
                   f"[05-调度] mark_done({task_name}, success={success}) "
                   f"→ 状态: {_st.value} · 下次执行: {_nrt_s}",
