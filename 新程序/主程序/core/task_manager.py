@@ -26,6 +26,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+try:
+    import yaml  # 写 tasks.yaml 默认调度条目（_append_tasks_yaml）
+except ImportError:  # pragma: no cover
+    yaml = None
+
 
 # ═══════════════════════════════════════════════════════════════
 #  §5.2 TaskMeta 数据结构
@@ -296,13 +301,27 @@ class TaskManager:
         else:
             subprocess.run(["xdg-open", str(path)], check=False)
 
-    def new_task(self, category: str, name: str, display: str = "") -> str:
+    def new_task(self, category: str, name: str, display: str = "",
+                 task_type: str = "event_task") -> str:
         """
         新建任务骨架文件（§3.3 + §5.3）。
 
-        在 tasks/{category}/ 下生成 .py 文件，返回文件路径。
+        task_type（core/task_template.py）：
+          event_task  非战斗任务 → tasks/{category}/，tasks.yaml 写默认调度（repeat=daily）
+          battle      战斗任务   → tasks/{category}/，tasks.yaml 写调度 + 作战配置
+          generic     通用任务   → tasks/common/，不写 tasks.yaml（无调度，供其他任务引用）
+          trigger     触发任务   → tasks/{category}/，tasks.yaml 写 trigger 规则 + 空触发模板
+
+        返回文件路径。
         """
-        cat_dir = self._tasks_dir / category
+        from core.task_template import generate as gen_template
+
+        # 通用任务固定放 common/ 目录（不注册为独立任务）
+        if task_type == "generic":
+            cat_dir = self._tasks_dir / self._common_dir
+            category = "common"
+        else:
+            cat_dir = self._tasks_dir / category
         cat_dir.mkdir(parents=True, exist_ok=True)
 
         filepath = cat_dir / f"{name}.py"
@@ -310,48 +329,62 @@ class TaskManager:
             raise FileExistsError(f"任务文件已存在: {filepath}")
 
         display_name = display or name
-        class_name = "".join(word.capitalize() for word in name.split("_"))
+        code = gen_template(task_type, name, display_name, category)
+        filepath.write_text(code, encoding="utf-8")
 
-        skeleton = f'''"""
-{category} 任务
+        # 非通用任务：tasks.yaml 追加默认调度条目（时间调度/作战配置）
+        if task_type != "generic":
+            self._append_tasks_yaml(task_type, name, display_name, category)
 
-{display_name} 自动执行。
-"""
-from __future__ import annotations
-
-from typing import Any
-
-from core.exceptions import TaskSkip
-from tasks.base.base_task import BaseTask
-from tasks.base.task_graph import TaskGraph
-from tasks.base.task_result import TaskResult, TaskStatus
-
-
-class {class_name}(BaseTask):
-    """ {display_name} """
-
-    task_id = "{name}"
-    display_name = "{display_name}"
-    description = "{display_name}"
-
-    def _build_graph(self) -> TaskGraph:
-        """声明步骤图（§5.3）"""
-        graph = TaskGraph()
-        # TODO: 添加任务步骤，如:
-        # from tasks.common.some_step import SomeStep
-        # graph.add_step("step1", SomeStep())
-        # graph.set_entry("step1")
-        return graph
-
-    # execute() 继承 BaseTask 的默认实现，自动调用 _build_graph().run(context)
-'''
-        filepath.write_text(skeleton, encoding="utf-8")
+        # 创建任务图片文件夹（asset_catalog 约定：专属/共享/识图）
+        try:
+            from core.asset_catalog import AssetCatalog
+            catalog = AssetCatalog(self._assets_dir)
+            catalog.ensure_scene_dir()
+            if task_type == "generic":
+                catalog.ensure_shared_dir()
+            else:
+                catalog.ensure_task_dir(name)
+        except Exception:
+            pass
 
         # 清除缓存让下次扫描重新加载
         with self._cache_lock:
             self._cache.clear()
 
         return str(filepath)
+
+    def _append_tasks_yaml(self, task_type: str, name: str, display: str,
+                           category: str) -> None:
+        """在 config/tasks.yaml 追加任务默认调度条目（原子写盘，失败不阻断）。"""
+        from core.task_template import build_yaml_entry
+        entry = build_yaml_entry(task_type, name, display, category)
+        if entry is None:
+            return
+        if yaml is None:
+            return
+        try:
+            p = Path(self._tasks_dir).parent / "config" / "tasks.yaml"
+            data = {}
+            if p.exists():
+                data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            if not isinstance(data, dict):
+                data = {}
+            tasks = data.setdefault("tasks", [])
+            if tasks is None:  # "tasks:" 空列表解析为 None
+                tasks = data["tasks"] = []
+            # 已存在同名任务 → 不重复追加
+            if any(t and t.get("name") == name for t in tasks):
+                return
+            tasks.append(entry)
+            tmp = p.with_suffix(".yaml.tmp")
+            tmp.write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False,
+                               default_flow_style=False),
+                encoding="utf-8")
+            os.replace(tmp, p)
+        except Exception:
+            pass
 
     def delete_task(self, task_name: str) -> None:
         """

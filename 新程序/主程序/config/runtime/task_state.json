@@ -9,11 +9,11 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-08-03T16:11:39.515878+08:00"
+    "updated": "2026-08-03T17:29:16.643320+08:00"
   },
   "once_test": {
     "task_name": "once_test",
-    "next_run_time": "",
+    "next_run_time": "2026-08-03T17:28:47.349901+08:00",
     "today_count": 8,
     "total_count": 8,
     "window_start": "",
@@ -21,7 +21,7 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-08-03T16:11:39.515878+08:00"
+    "updated": "2026-08-03T17:29:16.643320+08:00"
   },
   "combat_test": {
     "task_name": "combat_test",
@@ -33,7 +33,7 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-08-03T16:11:39.515878+08:00"
+    "updated": "2026-08-03T17:29:16.643320+08:00"
   },
   "manual_trigger_test": {
     "task_name": "manual_trigger_test",
@@ -45,7 +45,7 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-08-03T16:11:39.515878+08:00"
+    "updated": "2026-08-03T17:29:16.643320+08:00"
   },
   "image_trigger_test": {
     "task_name": "image_trigger_test",
@@ -57,6 +57,6 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-08-03T16:11:39.515878+08:00"
+    "updated": "2026-08-03T17:29:16.643320+08:00"
   }
 }

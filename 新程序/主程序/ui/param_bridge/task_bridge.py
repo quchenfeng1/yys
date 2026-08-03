@@ -66,6 +66,30 @@ class TaskBridge:
                 })
         return metas
 
+    def get_generic_modules(self) -> list[dict[str, Any]]:
+        """获取通用模块元数据列表（category=common，供 UI「通用任务」菜单展示/微调）。
+
+        通用模块不单独执行，被其他游戏任务引用为其一部分。
+        """
+        metas: list[dict[str, Any]] = []
+        if self._file_mgr and hasattr(self._file_mgr, 'get_generic_modules'):
+            for m in self._file_mgr.get_generic_modules():
+                metas.append({
+                    "name": m.name,
+                    "display_name": m.display_name,
+                    "description": m.description,
+                    "category": m.category,
+                    "task_type": getattr(m, 'task_type', 'event_task'),
+                    "uses_battle": getattr(m, 'uses_battle', False),
+                    "uses_team": getattr(m, 'uses_team', False),
+                    "uses_soul": getattr(m, 'uses_soul', False),
+                    "uses_stamina": getattr(m, 'uses_stamina', False),
+                    "loop_count": getattr(m, 'loop_count', 1),
+                    "timeout": getattr(m, 'timeout', 300),
+                    "is_generic": True,
+                })
+        return metas
+
     def get_task_detail(self, name: str) -> dict[str, Any]:
         """
         获取单个任务详情（§5.3 + 设计书 §4.3）。
@@ -268,10 +292,11 @@ class TaskBridge:
 
     # ── §5.3 任务文件管理 ─────────────────────────────────
 
-    def new_task(self, category: str, name: str, display: str = "") -> str:
-        """新建任务骨架文件（§5.3）"""
+    def new_task(self, category: str, name: str, display: str = "",
+                 task_type: str = "event_task") -> str:
+        """新建任务骨架文件（§5.3）。task_type: event_task/battle/generic/trigger"""
         if self._file_mgr and hasattr(self._file_mgr, 'new_task'):
-            return self._file_mgr.new_task(category, name, display)
+            return self._file_mgr.new_task(category, name, display, task_type=task_type)
         return ""
 
     def delete_task(self, task_name: str) -> None:

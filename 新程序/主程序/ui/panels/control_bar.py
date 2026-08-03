@@ -24,6 +24,18 @@ class ControlBar(QWidget):
         self.btn_stop = QPushButton("■ 停止")
         self.btn_pause = QPushButton("⏸ 暂停")
 
+        # 图标（qtawesome，仅样式）
+        from ui.theme import icon
+        _ic = icon("fa5s.play-circle", "#2e7d32")
+        if _ic:
+            self.btn_start.setIcon(_ic)
+        _ic = icon("fa5s.stop-circle", "#c62828")
+        if _ic:
+            self.btn_stop.setIcon(_ic)
+        _ic = icon("fa5s.pause-circle", "#ef6c00")
+        if _ic:
+            self.btn_pause.setIcon(_ic)
+
         self.btn_stop.setEnabled(False)
         self.btn_pause.setEnabled(False)
 

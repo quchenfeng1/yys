@@ -34,6 +34,7 @@ from ui.panels.sub_account_panel import SubAccountPanel
 from ui.panels.task_manager_panel import TaskManagerPanel
 from ui.panels.task_queue_panel import TaskQueuePanel
 from ui.panels.ui_settings_panel import UISettingsPanel
+from ui.theme import apply_theme
 
 
 class MainWindow(QMainWindow):
@@ -95,6 +96,15 @@ class MainWindow(QMainWindow):
 
     def init_ui(self) -> None:
         """初始化三栏布局 + 所有子面板 + 绑定（§5.2）"""
+        # 应用全局主题（qt-material Material 浅蓝优先，失败兜底内置浅色主题；仅样式）
+        try:
+            from PyQt5.QtWidgets import QApplication
+            _app = QApplication.instance()
+            if _app is not None:
+                apply_theme(_app)
+        except Exception:
+            pass
+
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -157,7 +167,7 @@ class MainWindow(QMainWindow):
             ("task_queue", "任务队列", TaskQueuePanel()),
             ("task_manager", "任务管理", TaskManagerPanel(param_bridge=self._param_bridge)),
             ("config", "配置", ConfigPanel(param_bridge=self._param_bridge)),
-            ("image", "素材管理", ImageManagerPanel()),
+            ("image", "素材管理", ImageManagerPanel(param_bridge=self._param_bridge)),
             ("accounts", "小号管理", SubAccountPanel()),
             ("history", "执行历史", ExecutionHistoryPanel()),
             ("ui_settings", "UI 设置", UISettingsPanel()),
@@ -233,6 +243,13 @@ class MainWindow(QMainWindow):
                 task_panel.load_tasks(metas)
             except Exception:
                 task_panel.load_tasks(tasks)
+            # 通用模块（common，不单独执行）
+            if hasattr(task_panel, 'load_generic'):
+                try:
+                    gmetas = self._param_bridge.task.get_generic_modules()
+                    task_panel.load_generic(gmetas)
+                except Exception:
+                    pass
         # 游戏任务面板：加载带 uses_* 声明的元数据（设计书 §4.3 动态表单）
         game_panel = self.panels.get("game_task")
         if game_panel and hasattr(game_panel, 'load_tasks'):
