@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QGroupBox,
+    QCheckBox, QComboBox, QFormLayout, QGroupBox, QLabel,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -17,11 +17,16 @@ class TeamEditor(QGroupBox):
     """阵容编辑器"""
 
     def __init__(self, parent=None):
-        super().__init__("阵容配置", parent)
+        super().__init__(parent)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        layout = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 6, 10, 10)
+        outer.setSpacing(4)
+        outer.addWidget(QLabel("阵容配置"))
+        layout = QFormLayout()
+        outer.addLayout(layout)
 
         self.team_combo = QComboBox()
         self.team_combo.addItems(["默认", "主力", "备用", "活动"])

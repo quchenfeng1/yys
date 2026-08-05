@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QComboBox, QFormLayout, QGroupBox, QSpinBox,
-    QTimeEdit, QWidget,
+    QComboBox, QFormLayout, QGroupBox, QLabel, QSpinBox,
+    QTimeEdit, QVBoxLayout, QWidget,
 )
 
 
@@ -17,11 +17,16 @@ class RepeatEditor(QGroupBox):
     """执行规则编辑器"""
 
     def __init__(self, parent=None):
-        super().__init__("执行规则", parent)
+        super().__init__(parent)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        layout = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 6, 10, 10)
+        outer.setSpacing(4)
+        outer.addWidget(QLabel("执行规则"))
+        layout = QFormLayout()
+        outer.addLayout(layout)
 
         self.type_combo = QComboBox()
         self.type_combo.addItems([

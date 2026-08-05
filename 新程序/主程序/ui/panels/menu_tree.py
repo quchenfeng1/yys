@@ -24,6 +24,7 @@ class MenuTree(QListWidget):
             ("image", "🖼 素材管理"),
             ("accounts", "👤 小号管理"),
             ("history", "📊 执行历史"),
+            ("ui_settings", "🎨 UI 设置"),
         ]
 
         for key, label in menu_items:
@@ -44,3 +45,17 @@ class MenuTree(QListWidget):
         item = self._items.get(key)
         if item:
             self.setCurrentItem(item)
+
+    # ── §3.8 面板显隐（UI 自控）──────────────────────────
+
+    def set_item_visible(self, key: str, visible: bool) -> None:
+        """显示/隐藏某个菜单项（面板显隐控制）"""
+        item = self._items.get(key)
+        if item:
+            item.setHidden(not visible)
+            if not visible and self.currentItem() is item:
+                # 当前选中项被隐藏 → 跳到第一个可见项
+                for it in self._items.values():
+                    if not it.isHidden():
+                        self.setCurrentItem(it)
+                        break

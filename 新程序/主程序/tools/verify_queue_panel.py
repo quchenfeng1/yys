@@ -9,6 +9,9 @@ from PyQt5.QtWidgets import QApplication
 
 def main():
     app = QApplication(sys.argv)
+    # 模拟真实环境：应用全局主题（qt-material），确认面板在其下仍保持紧凑
+    from ui.theme import apply_theme
+    apply_theme(app)
     from ui.panels.task_queue_panel import TaskQueuePanel
 
     panel = TaskQueuePanel()

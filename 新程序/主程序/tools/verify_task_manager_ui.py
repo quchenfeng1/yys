@@ -39,7 +39,11 @@ def main():
     groups = [panel.detail_layout.itemAt(i).widget()
               for i in range(panel.detail_layout.count())]
     groups = [w for w in groups if isinstance(w, QGroupBox)]
-    titles = [g.title() for g in groups]
+    # 标题已改为内部嵌入 QLabel（panel_group），收集 GroupBox 内所有 QLabel 文本
+    titles = []
+    for g in groups:
+        for lbl in g.findChildren(QLabel):
+            titles.append(lbl.text())
     assert any("任务图片" in t for t in titles), f"应有任务图片区: {titles}"
     print(f"② PASS 详情渲染：类型标签「战斗任务」+ 图片区（{titles}）")
 

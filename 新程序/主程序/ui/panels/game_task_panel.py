@@ -12,8 +12,8 @@ from typing import Any
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QPushButton, QScrollArea, QSpinBox,
+    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QPushButton, QScrollArea, QSpinBox,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -154,8 +154,10 @@ class GameTaskPanel(QWidget):
         te.setContentsMargins(6, 6, 6, 6)
 
         # ── ⏱ 时间调度（必配） ──
-        g_sched = QGroupBox("⏱ 时间调度（必配）")
-        f_sched = QFormLayout(g_sched)
+        from ui.theme import panel_group
+        g_sched, sched_content = panel_group("⏱ 时间调度（必配）")
+        f_sched = QFormLayout()
+        sched_content.addLayout(f_sched)
 
         cb_repeat = QComboBox()
         for val, label in REPEAT_TYPES:
@@ -181,17 +183,28 @@ class GameTaskPanel(QWidget):
         w["trigger_label"] = _tt_label
         w["trigger_templates"] = ed_tt
 
-        # 每周几（weekly 专属）
-        cb_weekday = QComboBox()
-        cb_weekday.addItem("不限", None)
+        # 每周几（weekly 专属，多选：如每周三、周六都可执行；全不选=每天）
+        wd_widget = QWidget()
+        wd_row = QHBoxLayout(wd_widget)
+        wd_row.setContentsMargins(0, 0, 0, 0)
+        wd_row.setSpacing(6)
+        wd_checks: dict[int, QCheckBox] = {}
         for label, val in [("周一", 0), ("周二", 1), ("周三", 2), ("周四", 3),
                            ("周五", 4), ("周六", 5), ("周日", 6)]:
-            cb_weekday.addItem(label, val)
-        rep_weekday = repeat.get("weekday") if isinstance(repeat, dict) else None
-        idx = cb_weekday.findData(rep_weekday)
-        cb_weekday.setCurrentIndex(idx if idx >= 0 else 0)
-        f_sched.addRow("每周几:", cb_weekday)
-        w["weekday"] = cb_weekday
+            _cb = QCheckBox(label)
+            wd_checks[val] = _cb
+            wd_row.addWidget(_cb)
+        wd_row.addStretch()
+        # 读取：weekdays（多选）优先，回退 weekday（单值）
+        rep_weekdays = None
+        if isinstance(repeat, dict):
+            rep_weekdays = repeat.get("weekdays") or (
+                [repeat["weekday"]] if repeat.get("weekday") is not None else None)
+        for val, _cb in wd_checks.items():
+            _cb.setChecked(rep_weekdays is not None and val in rep_weekdays)
+        f_sched.addRow("每周几:", wd_widget)
+        w["weekday"] = wd_widget
+        w["weekday_checks"] = wd_checks
 
         # 间隔值（interval_days/interval_hours 专属）
         sp_interval = QSpinBox()
@@ -253,8 +266,9 @@ class GameTaskPanel(QWidget):
         te.addWidget(g_sched)
 
         # ── 📊 执行模式（必配，设计书 §5.2 execution_mode） ──
-        g_freq = QGroupBox("📊 执行模式（必配）")
-        f_freq = QFormLayout(g_freq)
+        g_freq, freq_content = panel_group("📊 执行模式（必配）")
+        f_freq = QFormLayout()
+        freq_content.addLayout(f_freq)
 
         # 执行模式：按天执行一次 / 每时间段各执行一次
         cb_mode = QComboBox()
@@ -277,8 +291,9 @@ class GameTaskPanel(QWidget):
         te.addWidget(g_freq)
 
         # ── 其他：优先级 / 下次执行 ──
-        g_other = QGroupBox("其他")
-        f_other = QFormLayout(g_other)
+        g_other, other_content = panel_group("其他")
+        f_other = QFormLayout()
+        other_content.addLayout(f_other)
         sp_priority = QSpinBox()
         sp_priority.setRange(1, 99)
         sp_priority.setValue(int(detail.get("priority") or 10))
@@ -302,8 +317,9 @@ class GameTaskPanel(QWidget):
             tb.setContentsMargins(6, 6, 6, 6)
 
             # ── 🎴 御魂配置（选择御魂） ──
-            g_soul = QGroupBox("🎴 御魂配置（选择御魂）")
-            f_soul = QFormLayout(g_soul)
+            g_soul, soul_content = panel_group("🎴 御魂配置（选择御魂）")
+            f_soul = QFormLayout()
+            soul_content.addLayout(f_soul)
             _soul = detail.get("soul_setup") if isinstance(detail.get("soul_setup"), dict) else {}
             ed_grp = QLineEdit(str(_soul.get("group", "")))
             ed_grp.setPlaceholderText("组名，如：御魂副本")
@@ -327,8 +343,9 @@ class GameTaskPanel(QWidget):
             tb.addWidget(g_soul)
 
             # ── 🛡 战前准备 ──
-            g_prep = QGroupBox("🛡 战前准备")
-            f_prep = QFormLayout(g_prep)
+            g_prep, prep_content = panel_group("🛡 战前准备")
+            f_prep = QFormLayout()
+            prep_content.addLayout(f_prep)
             cb_lock = QCheckBox("锁定队伍（选是则无法更换）")
             cb_lock.setChecked(bool(detail.get("lock_team", False)))
             f_prep.addRow("是否锁定队伍:", cb_lock)
@@ -340,8 +357,9 @@ class GameTaskPanel(QWidget):
             tb.addWidget(g_prep)
 
             # ── ⚔ 战斗参数 ──
-            g_bparam = QGroupBox("⚔ 战斗参数")
-            f_bparam = QFormLayout(g_bparam)
+            g_bparam, bparam_content = panel_group("⚔ 战斗参数")
+            f_bparam = QFormLayout()
+            bparam_content.addLayout(f_bparam)
             ed_teamid = QLineEdit(detail.get("team_id") or "")
             ed_teamid.setPlaceholderText("选择或输入阵容 ID")
             f_bparam.addRow("阵容预设:", ed_teamid)
@@ -361,8 +379,9 @@ class GameTaskPanel(QWidget):
 
             # ── 🍃 体力配置（uses_stamina=True 显示） ──
             if uses_stamina:
-                g_sta = QGroupBox("🍃 体力配置")
-                f_sta = QFormLayout(g_sta)
+                g_sta, sta_content = panel_group("🍃 体力配置")
+                f_sta = QFormLayout()
+                sta_content.addLayout(f_sta)
                 sp_stamina = QSpinBox()
                 sp_stamina.setRange(0, 999)
                 sp_stamina.setSpecialValueText("不检查")
@@ -399,6 +418,9 @@ class GameTaskPanel(QWidget):
         ed_e.setMaximumWidth(80)
         btn_del = QPushButton("✕")
         btn_del.setMaximumWidth(28)
+        btn_del.setFixedHeight(26)
+        # 覆盖全局 QPushButton padding(5px 14px)：28px 宽被左右 padding 挤掉内容，只显示一个点
+        btn_del.setStyleSheet("padding: 0px 2px; font-size: 14px; font-weight: normal;")
         btn_del.setToolTip("删除该时段")
         pair = [ed_s, ed_e]
         row.addWidget(ed_s)
@@ -477,8 +499,11 @@ class GameTaskPanel(QWidget):
         repeat_dict["loop_count"] = w["loop_count"].value()
         if rtype in ("interval_days", "interval_hours"):
             repeat_dict["value"] = w["interval"].value()
-        elif rtype == "weekly" and w["weekday"].currentData() is not None:
-            repeat_dict["weekday"] = w["weekday"].currentData()
+        elif rtype == "weekly":
+            wd_checks = w.get("weekday_checks") or {}
+            selected = [val for val, _cb in wd_checks.items() if _cb.isChecked()]
+            if selected:
+                repeat_dict["weekdays"] = selected
 
         # 活动有效期（两个日期都留空 → 不写）
         ar_start = w["active_range_start"].text().strip()

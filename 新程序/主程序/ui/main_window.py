@@ -17,7 +17,7 @@ from typing import Any
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtWidgets import (
     QApplication, QHBoxLayout, QMainWindow, QMessageBox,
-    QSplitter, QStackedWidget, QVBoxLayout, QWidget,
+    QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from core.event_bus import EventBus, get_global_bus
@@ -127,14 +127,36 @@ class MainWindow(QMainWindow):
         self.central_stack = QStackedWidget()
         self._create_panels()
 
-        # 右侧：日志面板
+        # 右侧：日志/终端 抽屉（可收起，省出中央区域空间）
+        self.right_drawer = QWidget()
+        rd_lay = QHBoxLayout(self.right_drawer)
+        rd_lay.setContentsMargins(0, 0, 0, 0)
+        rd_lay.setSpacing(0)
+
+        self.drawer_handle = QToolButton()
+        self.drawer_handle.setFixedWidth(30)
+        self.drawer_handle.setToolTip("收起 / 展开 日志与终端")
+        self.drawer_handle.setStyleSheet(
+            "QToolButton { background:#eef4fd; border:1px solid #bcd4f0;"
+            " margin:6px 2px; }"
+            "QToolButton:hover { background:#dcebfc; }"
+        )
+        self.drawer_handle.clicked.connect(self._toggle_drawer)
+        rd_lay.addWidget(self.drawer_handle)
+        # 初始图标（展开态，指向右 → 点击收起）
+        from ui.theme import icon as _theme_icon
+        _ic = _theme_icon("fa5s.angle-right", "#1e6fd9")
+        if _ic:
+            self.drawer_handle.setIcon(_ic)
+
         self.log_panel = LogPanel()
         self.log_panel.setMinimumWidth(250)
         self.log_panel.setMaximumWidth(450)
+        rd_lay.addWidget(self.log_panel, 1)
 
         self.splitter.addWidget(self.menu_tree)
         self.splitter.addWidget(self.central_stack)
-        self.splitter.addWidget(self.log_panel)
+        self.splitter.addWidget(self.right_drawer)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 3)
         self.splitter.setStretchFactor(2, 1)
@@ -187,11 +209,64 @@ class MainWindow(QMainWindow):
         if widget:
             self.central_stack.setCurrentWidget(widget)
 
+    # ── §3.8 UI 自控：面板显隐 + 主题切换 ─────────────────
+
+    def set_panel_visible(self, key: str, visible: bool) -> None:
+        """显示/隐藏中央面板（UI 设置面板调用，§3.8 面板显隐控制）。
+
+        隐藏：从 QStackedWidget 移除 widget + 隐藏菜单项；
+        显示：重新加入 + 显示菜单项。
+        """
+        widget = self.panels.get(key)
+        if widget is None:
+            return
+        if visible:
+            # 已加入则无需重复 add
+            if self.central_stack.indexOf(widget) < 0:
+                self.central_stack.addWidget(widget)
+        else:
+            idx = self.central_stack.indexOf(widget)
+            if idx >= 0:
+                self.central_stack.removeWidget(widget)
+            if self.central_stack.currentWidget() == widget:
+                # 切换到第一个可见面板
+                first = self.panels.get("game_task")
+                if first is not None and self.central_stack.indexOf(first) >= 0:
+                    self.central_stack.setCurrentWidget(first)
+        if hasattr(self.menu_tree, 'set_item_visible'):
+            self.menu_tree.set_item_visible(key, visible)
+
+    def set_theme(self, theme: str) -> None:
+        """切换明/暗主题（§3.8 主题切换）"""
+        try:
+            from PyQt5.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                apply_theme(app, theme=theme)
+                self._current_theme = theme
+        except Exception:
+            pass
+
+    def _toggle_drawer(self) -> None:
+        """切换右侧日志/终端抽屉（收起/展开）"""
+        from ui.theme import icon as _theme_icon
+        if self.log_panel.isVisible():
+            self.log_panel.hide()
+            _ic = _theme_icon("fa5s.angle-left", "#1e6fd9")
+            if _ic:
+                self.drawer_handle.setIcon(_ic)   # 指向左 → 点击展开
+        else:
+            self.log_panel.show()
+            _ic = _theme_icon("fa5s.angle-right", "#1e6fd9")
+            if _ic:
+                self.drawer_handle.setIcon(_ic)   # 指向右 → 点击收起
+
     def _connect_control_bar(self) -> None:
         """
         连接控制栏按钮 → ParamBridge 的 RunBridge（§3.2 运行传参）。
 
         用户点击启动/停止/暂停/恢复 → RunBridge 发布事件 → 09 订阅执行。
+        沙盒开关 → RunBridge.set_dry_mode()；自检 → RunBridge.run_self_check()。
         """
         if not self._param_bridge:
             return
@@ -204,6 +279,9 @@ class MainWindow(QMainWindow):
         cb.stop_clicked.connect(lambda: self._safe_call(run_bridge.request_stop))
         cb.pause_clicked.connect(lambda: self._safe_call(run_bridge.request_pause))
         cb.resume_clicked.connect(lambda: self._safe_call(run_bridge.request_resume))
+        cb.dry_run_toggled.connect(
+            lambda enabled: self._safe_call(lambda: run_bridge.set_dry_mode(enabled)))
+        cb.self_check_clicked.connect(lambda: self._safe_call(self._on_self_check))
 
     @staticmethod
     def _safe_call(fn) -> None:
@@ -438,6 +516,50 @@ class MainWindow(QMainWindow):
                 self._refresh_queue_panel()
             except Exception:
                 pass
+
+    def _on_self_check(self) -> None:
+        """自检按钮：RunBridge.run_self_check() → 弹窗展示结果（§3.7）"""
+        run_bridge = getattr(self._param_bridge, 'run', None) if self._param_bridge else None
+        if not run_bridge or not hasattr(run_bridge, 'run_self_check'):
+            QMessageBox.information(self, "自检", "运行控制器未连接，无法自检")
+            return
+        try:
+            result = run_bridge.run_self_check()
+        except Exception as e:
+            QMessageBox.warning(self, "自检失败", str(e))
+            return
+
+        lines = []
+        ok_all = True
+        # 配置
+        if result.get("config_valid"):
+            lines.append("✅ 配置：合法")
+        else:
+            ok_all = False
+            errs = result.get("config_errors") or ["未知"]
+            lines.append(f"❌ 配置：非法（{errs}）")
+        # ADB
+        if result.get("adb_connectivity"):
+            lines.append("✅ ADB 连接：已连接")
+        else:
+            ok_all = False
+            lines.append("❌ ADB 连接：未连接（模拟器未开启？）")
+        # 素材
+        if result.get("assets_complete"):
+            lines.append("✅ 素材：完整")
+        else:
+            ok_all = False
+            missing = result.get("missing_assets") or []
+            lines.append(f"❌ 素材：缺失 {missing}")
+        # 依赖
+        if result.get("dependencies_complete"):
+            lines.append("✅ 依赖：完整")
+        else:
+            ok_all = False
+            lines.append(f"❌ 依赖：缺失 {result.get('missing_dependencies')}")
+
+        title = "✅ 自检通过" if ok_all else "⚠️ 自检发现问题"
+        QMessageBox.information(self, title, "\n".join(lines))
 
     def _on_task_skipped(self, **kw: Any) -> None:
         task_name = kw.get("task_name", "")

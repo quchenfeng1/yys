@@ -1,7 +1,7 @@
 {
   "slot_task": {
     "task_name": "slot_task",
-    "next_run_time": "2026-08-04T13:49:00+08:00",
+    "next_run_time": "2026-08-06T09:47:00+08:00",
     "today_count": 2,
     "total_count": 2,
     "window_start": "",
@@ -9,11 +9,11 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-08-03T16:49:41.435013+08:00"
+    "updated": "2026-08-05T12:47:30.081404+08:00"
   },
   "slot_daily": {
     "task_name": "slot_daily",
-    "next_run_time": "2026-08-04T13:49:00+08:00",
+    "next_run_time": "2026-08-06T09:47:00+08:00",
     "today_count": 1,
     "total_count": 1,
     "window_start": "",
@@ -21,6 +21,6 @@
     "last_done": "",
     "last_status": "",
     "skip_reason": "",
-    "updated": "2026-08-03T16:49:41.435013+08:00"
+    "updated": "2026-08-05T12:47:30.081404+08:00"
   }
 }

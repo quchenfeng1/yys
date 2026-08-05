@@ -51,7 +51,8 @@ class RepeatConfig:
     """重复规则配置（§5.2 RepeatConfig）"""
     type: str = "daily"  # once/daily/weekly/monthly_start/interval_days/interval_hours/expire_at/special/on_enter/trigger
     value: int | None = None  # interval_days=N / interval_hours=N
-    weekday: int | None = None  # weekly 专属 0=周一~6=周日
+    weekday: int | None = None  # weekly 专属 0=周一~6=周日（旧字段，单值）
+    weekdays: list[int] | None = None  # weekly 专属多选（新）：每周几执行，如 [2,5]=周三、周六
     window: dict | None = None  # special 专属 {date, start, end}
     expire_at: str | None = None  # expire_at 专属到期日期
     loop_count: int | None = None  # 战斗循环次数
@@ -185,6 +186,7 @@ class Scheduler:
                 type=repeat_raw.get('type', 'daily') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'type', 'daily'),
                 value=repeat_raw.get('value') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'value', None),
                 weekday=repeat_raw.get('weekday') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'weekday', None),
+                weekdays=repeat_raw.get('weekdays') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'weekdays', None),
                 window=repeat_raw.get('window') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'window', None),
                 expire_at=repeat_raw.get('expire_at') if isinstance(repeat_raw, dict) else getattr(repeat_raw, 'expire_at', None),
                 loop_count=_rep_loop if _rep_loop is not None else _top_loop,
@@ -427,6 +429,15 @@ class Scheduler:
             return dt.replace(tzinfo=tz)
         return dt
 
+    @staticmethod
+    def _resolve_weekdays(repeat: RepeatConfig) -> list[int]:
+        """weekly 匹配日列表：优先 weekdays（多选），回退 weekday（单值）。"""
+        if repeat and repeat.weekdays:
+            return list(repeat.weekdays)
+        if repeat and repeat.weekday is not None:
+            return [repeat.weekday]
+        return []
+
     def _calc_initial_next_run(self, config: TaskConfig) -> datetime | None:
         """计算初始 next_run_time（支持多时段 time_slots）。
 
@@ -449,7 +460,7 @@ class Scheduler:
                 interval=config.repeat.value or 1,
                 time=config.time_start or "06:00",
                 time_end=config.time_end or "",
-                weekdays=[config.repeat.weekday] if config.repeat.weekday is not None else [],
+                weekdays=self._resolve_weekdays(config.repeat),
                 expire_date=config.repeat.expire_at or "",
             )
             return rule.get_initial_next_run(now)
@@ -881,7 +892,7 @@ class Scheduler:
                 type=config.repeat.type,
                 interval=config.repeat.value or 1,
                 time=config.time_start or "06:00",
-                weekdays=[config.repeat.weekday] if config.repeat.weekday is not None else [],
+                weekdays=self._resolve_weekdays(config.repeat),
                 expire_date=config.repeat.expire_at or "",
             )
             sentinel = datetime.max.replace(tzinfo=self._timezone)
@@ -980,7 +991,7 @@ class Scheduler:
                             type=config.repeat.type,
                             interval=config.repeat.value or 1,
                             time=config.time_start or "06:00",
-                            weekdays=[config.repeat.weekday] if config.repeat.weekday is not None else [],
+                            weekdays=self._resolve_weekdays(config.repeat),
                             expire_date=config.repeat.expire_at or "",
                         )
                         last_run = self._ensure_tz(self._next_run.get(task_name) or now)

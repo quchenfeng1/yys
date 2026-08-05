@@ -195,8 +195,10 @@ class TaskManagerPanel(QWidget):
         title.setStyleSheet("font-size:16px; font-weight:bold;")
         self.detail_layout.addWidget(title)
 
-        g = QGroupBox("元数据")
-        form = QFormLayout(g)
+        from ui.theme import panel_group
+        g, meta_content = panel_group("元数据")
+        form = QFormLayout()
+        meta_content.addLayout(form)
         task_type = detail.get("task_type", "")
         type_label = _TASK_TYPE_LABELS.get(task_type, task_type)
         if is_generic:
@@ -234,8 +236,8 @@ class TaskManagerPanel(QWidget):
             pic_title = f"任务图片（tasks/{name}/）"
         self._detail_images = imgs
 
-        g2 = QGroupBox(pic_title)
-        gv = QVBoxLayout(g2)
+        g2, pic_content = panel_group(pic_title)
+        gv = pic_content
         img_list = QListWidget()
         img_list.currentRowChanged.connect(self._on_detail_image_selected)
         # 固定高度：避免详情滚动区内再嵌套长列表滚动条

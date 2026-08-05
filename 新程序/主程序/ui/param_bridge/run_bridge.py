@@ -82,3 +82,80 @@ class RunBridge:
             self._ctrl.resume()
         else:
             self.request_resume()
+
+    # ── §3.7 沙盒模式 / 自检 ──────────────────────────────
+
+    def set_dry_mode(self, enabled: bool) -> None:
+        """切换沙盒模式（干运行：只走流程不实际点击）。
+
+        优先直接调 RunController.set_dry_mode()（§3.7），
+        无 controller 时回退发布 RUN_STARTED 事件（兼容旧路径）。
+        """
+        if self._ctrl and hasattr(self._ctrl, 'set_dry_mode'):
+            try:
+                self._ctrl.set_dry_mode(bool(enabled))
+                return
+            except Exception:
+                pass
+        self._bus.publish(Events.RUN_STARTED, source="RunBridge",
+                          dry_run=bool(enabled))
+
+    def run_self_check(self) -> dict[str, Any]:
+        """运行环境自检（ADB/素材/配置/依赖，§3.7 自检按钮）。
+
+        通过 RunController 的 connection / config / registry 快速检查，
+        返回 {检查项: 结果} 字典。无 controller 时返回空。
+        """
+        result: dict[str, Any] = {
+            "config_valid": True,
+            "adb_connectivity": False,
+            "assets_complete": True,
+            "dependencies_complete": True,
+        }
+        ctrl = self._ctrl
+        if ctrl is None:
+            return result
+
+        # 配置
+        cfg = getattr(ctrl, 'config', None)
+        if cfg is not None and hasattr(cfg, 'validate'):
+            try:
+                errors = cfg.validate()
+                if errors:
+                    result["config_valid"] = False
+                    result["config_errors"] = errors
+            except Exception:
+                result["config_valid"] = False
+
+        # ADB 连通性
+        conn = getattr(ctrl, 'connection', None)
+        if conn is not None and hasattr(conn, 'is_connected'):
+            try:
+                result["adb_connectivity"] = conn.is_connected()
+            except Exception:
+                pass
+
+        # 素材完整性
+        reg = getattr(ctrl, 'registry', None)
+        if reg is not None and hasattr(reg, 'get_all'):
+            try:
+                tasks = reg.get_all()
+                missing = [
+                    getattr(t, 'task_id', '') or getattr(t, 'name', '')
+                    for t in tasks
+                    if not getattr(t, 'has_assets', True)
+                ]
+                if missing:
+                    result["assets_complete"] = False
+                    result["missing_assets"] = missing
+            except Exception:
+                pass
+
+        # 依赖
+        required = ["scheduler", "executor", "recognizer", "connection"]
+        missing = [n for n in required if getattr(ctrl, n, None) is None]
+        if missing:
+            result["dependencies_complete"] = False
+            result["missing_dependencies"] = missing
+
+        return result

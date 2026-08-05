@@ -28,7 +28,6 @@ _PANEL_QSS = """
 QFrame#TaskCard {
     background: #fbfbfd;
     border: 1px solid #d8dbe0;
-    border-radius: 8px;
 }
 QFrame#TaskCard:hover { background: #f0f5ff; border-color: #4a90d9; }
 QLabel#card_title { font-size: 13px; font-weight: bold; color: #222; background: transparent; }
@@ -36,27 +35,40 @@ QLabel#card_sub   { font-size: 11px; color: #888; background: transparent; }
 QListWidget {
     background: transparent;
     border: none;
+    padding: 0px;
+}
+QListWidget::item {
+    padding: 0px;
+    margin: 0px;
+    background: transparent;
 }
 QGroupBox {
     font-size: 12px; font-weight: bold; color: #333;
-    border: 1px solid #c8ccd4; border-radius: 8px;
-    margin-top: 12px; padding-top: 4px;
+    border: 1px solid #c8ccd4;
+    margin-top: 0px; padding-top: 4px;
+    padding-left: 0px; padding-right: 0px; padding-bottom: 0px;
     background: #f7f8fa;
 }
 QGroupBox::title {
-    subcontrol-origin: margin; left: 10px; padding: 0 4px;
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px; padding: 0 4px;
     background: #f7f8fa; color: #333;
 }
 QFrame#CurrentCard {
     background: #eef7ee;
     border: 1px solid #4CAF50;
-    border-radius: 10px;
 }
 QPushButton {
-    border: 1px solid #1e88e5; border-radius: 6px; background: #e8f1fc;
+    border: 1px solid #1e88e5; background: #e8f1fc;
     color: #1565c0; padding: 2px 8px; font-size: 11px;
 }
 QPushButton:hover { background: #d4e6fb; }
+QPushButton#card_action_btn {
+    border: 1px solid #1e88e5; background: #1e88e5;
+    color: #fff; font-weight: bold; font-size: 12px;
+}
+QPushButton#card_action_btn:hover { background: #1565c0; }
 """
 
 
@@ -75,36 +87,40 @@ class TaskCard(QFrame):
     ):
         super().__init__(parent)
         self.setObjectName("TaskCard")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(9, 5, 9, 5)
-        lay.setSpacing(2)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(9, 5, 9, 5)
+        outer.setSpacing(6)
 
-        # 第一行：徽章 + 标题 + 操作按钮
+        # ── 左侧内容区（徽章 + 标题 + 副信息） ────────────
+        content = QVBoxLayout()
+        content.setSpacing(2)
         row = QHBoxLayout()
         row.setSpacing(7)
         if badge_text:
             badge = QLabel(badge_text)
             badge.setObjectName("card_badge")
             badge.setStyleSheet(
-                f"color:#fff; border-radius:8px; padding:1px 7px; font-size:10px; "
+                f"color:#fff; padding:1px 7px; font-size:10px; "
                 f"background:{badge_color or _DEFAULT_BADGE};")
             row.addWidget(badge)
         title_lbl = QLabel(title)
         title_lbl.setObjectName("card_title")
         row.addWidget(title_lbl, 1)
-        if action_text and on_action is not None:
-            btn = QPushButton(action_text)
-            btn.setMaximumWidth(64)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda _=False: on_action())
-            row.addWidget(btn)
-        lay.addLayout(row)
-
-        # 第二行：副信息
+        content.addLayout(row)
         if sub:
             sub_lbl = QLabel(sub)
             sub_lbl.setObjectName("card_sub")
-            lay.addWidget(sub_lbl)
+            content.addWidget(sub_lbl)
+        outer.addLayout(content, 1)
+
+        # ── 右侧操作按钮区（卡片一分为二：右侧小部分为按钮）──
+        if action_text and on_action is not None:
+            btn = QPushButton(action_text)
+            btn.setObjectName("card_action_btn")
+            btn.setFixedWidth(58)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _=False: on_action())
+            outer.addWidget(btn, 0)
 
 
 class TaskQueuePanel(QWidget):
@@ -118,6 +134,7 @@ class TaskQueuePanel(QWidget):
         self.setStyleSheet(_PANEL_QSS)
         layout = QVBoxLayout(self)
         layout.setSpacing(6)
+        # ── 面板标题（普通嵌入标签，与其他面板一致） ──
         layout.addWidget(QLabel("任务队列"))
 
         # ── 上方：正在执行（大卡片） ───────────────────────
@@ -137,29 +154,30 @@ class TaskQueuePanel(QWidget):
         splitter = QSplitter(Qt.Horizontal)
 
         # 左：待执行（容器框）
-        left_box = QGroupBox("⏳ 待执行")
-        ll = QVBoxLayout(left_box)
-        ll.setSpacing(4)
+        from ui.theme import panel_group
+        left_box, ll = panel_group("⏳ 待执行")
+        ll.setSpacing(2)
+        ll.setContentsMargins(6, 2, 6, 6)
         self.pending_list = QListWidget()
-        self.pending_list.setSpacing(4)
+        self.pending_list.setSpacing(2)
         ll.addWidget(self.pending_list)
         splitter.addWidget(left_box)
 
         # 中：未开始（容器框）
-        middle_box = QGroupBox("🕐 未开始")
-        ml = QVBoxLayout(middle_box)
-        ml.setSpacing(4)
+        middle_box, ml = panel_group("🕐 未开始")
+        ml.setSpacing(2)
+        ml.setContentsMargins(6, 2, 6, 6)
         self.upcoming_list = QListWidget()
-        self.upcoming_list.setSpacing(4)
+        self.upcoming_list.setSpacing(2)
         ml.addWidget(self.upcoming_list)
         splitter.addWidget(middle_box)
 
         # 右：已失效（容器框）
-        right_box = QGroupBox("⚠ 已失效")
-        rl = QVBoxLayout(right_box)
-        rl.setSpacing(4)
+        right_box, rl = panel_group("⚠ 已失效")
+        rl.setSpacing(2)
+        rl.setContentsMargins(6, 2, 6, 6)
         self.invalid_list = QListWidget()
-        self.invalid_list.setSpacing(4)
+        self.invalid_list.setSpacing(2)
         rl.addWidget(self.invalid_list)
         splitter.addWidget(right_box)
 

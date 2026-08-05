@@ -64,8 +64,10 @@ class ConfigPanel(QWidget):
         root.addWidget(self._status_label)
 
         # ── 设备组 ──────────────────────────────────────
-        g_dev = QGroupBox("设备 (device)")
-        f_dev = QFormLayout(g_dev)
+        from ui.theme import panel_group
+        g_dev, dev_content = panel_group("设备 (device)")
+        f_dev = QFormLayout()
+        dev_content.addLayout(f_dev)
         self._add_field(f_dev, "device.adb.host", "ADB 主机", "line", "127.0.0.1")
         self._add_field(f_dev, "device.adb.port", "ADB 端口", "int", 5037, 1, 65535)
         self._add_field(f_dev, "device.adb.timeout", "ADB 超时(秒)", "float", 30.0, 1, 120)
@@ -83,8 +85,9 @@ class ConfigPanel(QWidget):
         self._form_layout.addWidget(g_dev)
 
         # ── 识别组 ──────────────────────────────────────
-        g_img = QGroupBox("图像识别 (image)")
-        f_img = QFormLayout(g_img)
+        g_img, img_content = panel_group("图像识别 (image)")
+        f_img = QFormLayout()
+        img_content.addLayout(f_img)
         self._add_field(f_img, "image.template_threshold", "模板匹配阈值", "float", 0.8, 0.0, 1.0, 0.05)
         self._add_field(f_img, "image.ocr_enabled", "启用 OCR", "bool", True)
         self._add_field(f_img, "image.ocr_timeout", "OCR 超时(秒)", "int", 10, 1, 120)
@@ -93,8 +96,9 @@ class ConfigPanel(QWidget):
         self._form_layout.addWidget(g_img)
 
         # ── 防封组 ──────────────────────────────────────
-        g_ad = QGroupBox("防封策略 (anti_detect)")
-        f_ad = QFormLayout(g_ad)
+        g_ad, ad_content = panel_group("防封策略 (anti_detect)")
+        f_ad = QFormLayout()
+        ad_content.addLayout(f_ad)
         self._add_field(f_ad, "anti_detect.enabled", "启用防封", "bool", True)
         self._add_field(f_ad, "anti_detect.min_interval", "最小间隔(秒)", "float", 1.0, 0.1, 60)
         self._add_field(f_ad, "anti_detect.max_interval", "最大间隔(秒)", "float", 5.0, 0.1, 120)
@@ -106,16 +110,18 @@ class ConfigPanel(QWidget):
         self._form_layout.addWidget(g_ad)
 
         # ── 调度组 ──────────────────────────────────────
-        g_sc = QGroupBox("时间调度 (schedule)")
-        f_sc = QFormLayout(g_sc)
+        g_sc, sc_content = panel_group("时间调度 (schedule)")
+        f_sc = QFormLayout()
+        sc_content.addLayout(f_sc)
         self._add_field(f_sc, "schedule.enabled", "启用自动调度", "bool", False)
         self._add_field(f_sc, "schedule.timezone", "时区", "line", "Asia/Shanghai")
         self._add_field(f_sc, "schedule.crontab", "Crontab", "line", "")
         self._form_layout.addWidget(g_sc)
 
         # ── 日志组 ──────────────────────────────────────
-        g_lg = QGroupBox("日志 (log)")
-        f_lg = QFormLayout(g_lg)
+        g_lg, lg_content = panel_group("日志 (log)")
+        f_lg = QFormLayout()
+        lg_content.addLayout(f_lg)
         self._add_field(f_lg, "log.level", "日志级别", "choice", "INFO", choices=LOG_LEVELS)
         self._add_field(f_lg, "log.dir", "日志目录", "line", "logs")
         self._add_field(f_lg, "log.rotation", "轮转大小", "line", "10 MB")
