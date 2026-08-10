@@ -504,6 +504,56 @@ class TaskManager:
         missing = [name for name in sorted(referenced) if _is_missing(name)]
         return missing
 
+    # ── §5.2 任务图片引用提取 ─────────────────────────────
+
+    def get_task_asset_refs(self, name: str) -> list[str]:
+        """
+        扫描指定任务文件的代码，提取引用的素材名（逻辑名/相对路径）。
+
+        与 find_missing_assets 相同的正则模式；只扫描文件名为 name 的 .py。
+        返回有序去重的引用名列表；任务文件缺失返回空列表。
+
+        用途：任务 UI「图片设置」区展示该任务用到的图片清单，
+        并支持把 {逻辑名: 素材路径} 映射写入 tasks.yaml 的 images 字段。
+        """
+        patterns = [
+            r'click_image\s*\(\s*["\']([^"\']+)["\']',
+            r'find_one\s*\(\s*["\']([^"\']+)["\']',
+            r'wait_any\s*\(\s*\[([^\]]+)\]',
+            r'detect_scene\s*\(\s*\[([^\]]+)\]',
+            r'ensure_scene\s*\(\s*["\']([^"\']+)["\']',
+            r'click_if_exists\s*\(\s*["\']([^"\']+)["\']',
+            r'image\s*=\s*["\']([^"\']+)["\']',
+        ]
+        refs: set[str] = set()
+
+        for py_file in self._tasks_dir.rglob("*.py"):
+            if py_file.name == "__init__.py" or py_file.stem != name:
+                continue
+            try:
+                source = py_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            # 剔除注释行/行内注释，避免误报
+            code_lines = []
+            for line in source.split("\n"):
+                stripped = line.lstrip()
+                if stripped.startswith("#"):
+                    continue
+                hash_idx = line.find(" #")
+                code_lines.append(line[:hash_idx] if hash_idx >= 0 else line)
+            clean_source = "\n".join(code_lines)
+
+            for pat in patterns:
+                for match in re.finditer(pat, clean_source):
+                    if pat.startswith("wait_any") or pat.startswith("detect_scene"):
+                        inner = match.group(1)
+                        parts = [p.strip().strip('"').strip("'") for p in inner.split(",")]
+                        refs.update(p for p in parts if p)
+                    else:
+                        refs.add(match.group(1))
+        return sorted(refs)
+
     # ═══════════════════════════════════════════════════════════
     #  兼容旧方法（配置 CRUD）
     # ═══════════════════════════════════════════════════════════

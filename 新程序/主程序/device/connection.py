@@ -266,6 +266,9 @@ class ConnectionManager:
                 self._current_serial = device_id
                 self._connected = True
                 self._conn_pause_event.set()
+                # 切换设备后旧截图缓存失效（§3.4 多开切换：避免识别到上一个模拟器画面）
+                self._screenshot_cache = None
+                self._screenshot_cache_time = 0.0
                 return True
             try:
                 client = ADBClient(serial=device_id)
@@ -276,6 +279,9 @@ class ConnectionManager:
                     self._connected = True
                     self._conn_pause_event.set()
                     self._connection_status = ConnectionState.CONNECTED
+                    # 切换设备后旧截图缓存失效
+                    self._screenshot_cache = None
+                    self._screenshot_cache_time = 0.0
                     if self._state_mgr:
                         self._state_mgr.set("active_device_id", device_id)
                     return True
@@ -311,6 +317,9 @@ class ConnectionManager:
                     self._connected = True
                 self._conn_pause_event.set()
                 self._connection_status = ConnectionState.CONNECTED
+                # 重连到（可能不同的）设备后旧截图缓存失效
+                self._screenshot_cache = None
+                self._screenshot_cache_time = 0.0
                 self._bus.publish(Events.CONNECTION_RESTORED, source="connection", serial=target)
                 if self._state_mgr:
                     self._state_mgr.set("connection_status", ConnectionState.CONNECTED)

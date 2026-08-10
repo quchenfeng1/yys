@@ -1,47 +1,31 @@
 # 素材目录（assets/）
 
-本目录存放图像识别模块使用的**模板图片**（PNG 格式）。素材按场景/用途分目录组织，
-引用名 = 相对路径不含扩展名（如 `common/ui/close_btn` 对应 `common/ui/close_btn.png`）。
+本目录存放图像识别模块使用的**模板图片**（PNG/JPG 等）。
+素材按用途分为**两类**，与「素材管理」面板的两个 Tab 一一对应：
 
-## 目录结构约定
+## 两类素材
 
-```
-assets/
-├── scenes/
-│   ├── courtyard/      # 庭院场景
-│   │   └── courtyard_main.png   # 庭院主界面
-│   └── login/
-│       └── enter_game.png       # 登录/进入游戏界面
-├── common/
-│   ├── battle/         # 战斗通用
-│   │   ├── victory.png          # 战斗胜利
-│   │   └── defeat.png           # 战斗失败
-│   ├── popup/          # 弹窗通用
-│   │   ├── popup_reward.png     # 奖励弹窗
-│   │   ├── popup_ad.png         # 广告弹窗
-│   │   └── popup_update.png     # 更新弹窗
-│   └── ui/             # 界面通用
-│       └── close_btn.png        # 关闭按钮
-```
+| 目录 | 面板 Tab | 用途 | 代码引用方式 |
+|:-----|:---------|:-----|:-------------|
+| `assets/scene/` | 🧭 **识图素材** | 脚本**识别**的背景/场景模板（主界面、战斗界面等） | `detect_scene` / `ensure_scene` / `scene_probe`，如 `scene/主界面` |
+| `assets/tasks/_shared/` | 🎮 **控制素材** | 需要**点击**的按钮/控件模板（确认、关闭、开始战斗等） | `click_image` / `click_if_exists`，如 `tasks/_shared/开始战斗` |
 
-## 当前缺失的模板（启动自检会提示）
+> 引用名 = 相对 `assets/` 的路径不含扩展名。
+> 例如 `scene/团票封面` 对应 `assets/scene/团票封面.jpg`；
+> `tasks/_shared/开始战斗` 对应 `assets/tasks/_shared/开始战斗.png`。
 
-| 模板引用 | 建议文件路径 | 用途 |
-|---------|------------|------|
-| `close_btn` | `common/ui/close_btn.png` | 关闭按钮（弹窗拦截/错误恢复） |
-| `confirm` | `common/ui/confirm.png` | 确认按钮（战斗结算） |
-| `victory` | `common/battle/victory.png` | 战斗胜利结算 |
-| `defeat` | `common/battle/defeat.png` | 战斗失败结算 |
-| `courtyard_main` | `scenes/courtyard/courtyard_main.png` | 庭院场景（错误恢复） |
-| `enter_game` | `scenes/login/enter_game.png` | 登录界面（断线检测） |
-| `popup_reward` | `common/popup/popup_reward.png` | 奖励弹窗（弹窗拦截） |
+## 补充：任务专属图片（可选）
+
+游戏任务还可以有专属图片目录 `assets/tasks/{任务名}/`（如 `assets/tasks/combat_test/`），
+供单个任务独有、不与他人共享的图片使用（引用 `tasks/{任务名}/xxx`）。
+「素材管理」面板只展示两类共享素材；任务专属图片在「任务管理 → 任务详情 → 图片设置」中查看/管理。
 
 ## 如何添加素材
 
 1. 在游戏模拟器中截图目标画面
-2. 裁剪出目标区域（按钮/图标/场景标志）
-3. 保存为 PNG 放入对应目录（目录不存在则新建）
-4. 重启程序或点击「素材管理」面板的「刷新」按钮
+2. 裁剪出目标区域（背景/场景 → 识图素材；按钮/控件 → 控制素材）
+3. 保存图片（PNG 建议）
+4. 在「素材管理」面板切到对应 Tab（🧭识图素材 / 🎮控制素材），点「➕ 添加图片」选择文件
+5. 完成后可点「🔄 刷新」查看
 
-> 提示：截图裁剪建议保留目标区域 + 少量边缘，模板越小匹配越快；
-> 使用「素材管理」面板可可视化查看/删除已加载素材。
+> 提示：截图裁剪建议保留目标区域 + 少量边缘，模板越小匹配越快。

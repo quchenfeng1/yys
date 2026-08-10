@@ -59,11 +59,40 @@ class RunBridge:
                 pass
         return []
 
+    def get_current_progress(self) -> int:
+        """当前任务执行进度 0-100（task_runtime_progress：BattleLoop 每场 completed/total）"""
+        try:
+            ctrl = self._ctrl
+            if not ctrl:
+                return 0
+            cur = getattr(ctrl, 'current_task', None)
+            if not cur:
+                return 0
+            mgr = getattr(ctrl, '_state_mgr', None)
+            if not mgr or not hasattr(mgr, 'get_state'):
+                return 0
+            progress = mgr.get_state("task_runtime_progress", {}) or {}
+            entry = progress.get(cur)
+            if isinstance(entry, dict):
+                completed = int(entry.get("completed", 0) or 0)
+                total = int(entry.get("total", 0) or 0)
+                if total > 0:
+                    return min(100, max(0, int(completed * 100 / total)))
+            return 0
+        except Exception:
+            return 0
+
+    def reset_task_cycle(self, task_name: str) -> None:
+        """重置指定任务的周期进度（手动更改配置后调用，下次从第 1 次开始）"""
+        if self._ctrl and hasattr(self._ctrl, 'reset_task_cycle'):
+            try:
+                self._ctrl.reset_task_cycle(task_name)
+            except Exception:
+                pass
+
     def start(self) -> None:
-        if self._ctrl:
-            self._ctrl.start()
-        else:
-            self.request_start()
+        """兼容旧名：发布 start_requested 事件（RunController 无 start 方法，勿直接调）。"""
+        self.request_start()
 
     def stop(self) -> None:
         if self._ctrl:
@@ -116,8 +145,8 @@ class RunBridge:
         if ctrl is None:
             return result
 
-        # 配置
-        cfg = getattr(ctrl, 'config', None)
+        # 配置（RunController 内部私有属性 _config）
+        cfg = getattr(ctrl, '_config', None)
         if cfg is not None and hasattr(cfg, 'validate'):
             try:
                 errors = cfg.validate()
@@ -128,7 +157,7 @@ class RunBridge:
                 result["config_valid"] = False
 
         # ADB 连通性
-        conn = getattr(ctrl, 'connection', None)
+        conn = getattr(ctrl, '_connection', None)
         if conn is not None and hasattr(conn, 'is_connected'):
             try:
                 result["adb_connectivity"] = conn.is_connected()
@@ -136,7 +165,7 @@ class RunBridge:
                 pass
 
         # 素材完整性
-        reg = getattr(ctrl, 'registry', None)
+        reg = getattr(ctrl, '_registry', None)
         if reg is not None and hasattr(reg, 'get_all'):
             try:
                 tasks = reg.get_all()
@@ -151,8 +180,8 @@ class RunBridge:
             except Exception:
                 pass
 
-        # 依赖
-        required = ["scheduler", "executor", "recognizer", "connection"]
+        # 依赖（RunController 内部私有属性 _scheduler/_executor/_recognizer/_connection）
+        required = ["_scheduler", "_executor", "_recognizer", "_connection"]
         missing = [n for n in required if getattr(ctrl, n, None) is None]
         if missing:
             result["dependencies_complete"] = False

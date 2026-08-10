@@ -159,6 +159,11 @@ class ApplicationBootstrap:
         self._store("state_manager", sm)
         self._add_shutdown_hook("state_manager", "reset")
 
+        # Monitor 写 execution_history 需要 StateManager（12-日志监控中心 → 07 注入）
+        mon = self._get("monitor")
+        if mon is not None and hasattr(mon, 'set_state_manager'):
+            mon.set_state_manager(sm)
+
     # ── 第3层：核心功能 ───────────────────────────────────
 
     def _init_connection(self) -> None:
@@ -359,6 +364,14 @@ class ApplicationBootstrap:
         )
         self._store("run_controller", rc)
         self._add_shutdown_hook("run_controller", "stop")
+
+        # 注入识图信号映射（scene/ 素材 → 信号名，来自 assets manifest）
+        try:
+            from core.asset_meta import AssetMetaStore
+            meta = AssetMetaStore(self._root / "assets")
+            rc.set_signal_map(meta.all_signals())
+        except Exception:
+            pass
 
         # 把 RunController 注入 RunBridge（供 UI 查询当前任务/队列）
         bridge = self._get("bridge")

@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 
 from core.event_bus import EventBus, get_global_bus
 from core.events import Events
-from ui.panels.config_panel import ConfigPanel
+from ui.panels.settings_panel import SettingsPanel
 from ui.panels.control_bar import ControlBar
 from ui.panels.execution_history import ExecutionHistoryPanel
 from ui.panels.game_task_panel import GameTaskPanel
@@ -33,7 +33,6 @@ from ui.panels.status_bar import StatusBar
 from ui.panels.sub_account_panel import SubAccountPanel
 from ui.panels.task_manager_panel import TaskManagerPanel
 from ui.panels.task_queue_panel import TaskQueuePanel
-from ui.panels.ui_settings_panel import UISettingsPanel
 from ui.theme import apply_theme
 
 
@@ -143,16 +142,18 @@ class MainWindow(QMainWindow):
         )
         self.drawer_handle.clicked.connect(self._toggle_drawer)
         rd_lay.addWidget(self.drawer_handle)
-        # 初始图标（展开态，指向右 → 点击收起）
-        from ui.theme import icon as _theme_icon
-        _ic = _theme_icon("fa5s.angle-right", "#1e6fd9")
-        if _ic:
-            self.drawer_handle.setIcon(_ic)
 
         self.log_panel = LogPanel()
         self.log_panel.setMinimumWidth(250)
         self.log_panel.setMaximumWidth(450)
         rd_lay.addWidget(self.log_panel, 1)
+
+        # 默认收起右侧日志（点把手展开）
+        self.log_panel.hide()
+        from ui.theme import icon as _theme_icon
+        _ic = _theme_icon("fa5s.angle-left", "#1e6fd9")  # 指向左 → 点击展开
+        if _ic:
+            self.drawer_handle.setIcon(_ic)
 
         self.splitter.addWidget(self.menu_tree)
         self.splitter.addWidget(self.central_stack)
@@ -170,8 +171,11 @@ class MainWindow(QMainWindow):
         # 菜单树切换
         self.menu_tree.navigation_requested.connect(self._switch_panel)
 
-        # 默认选中
-        if self.panels:
+        # 默认选中：任务队列（打开脚本自动进入）
+        if "task_queue" in self.panels:
+            self._switch_panel("task_queue")
+            self.menu_tree.select("task_queue")
+        elif self.panels:
             first_key = list(self.panels.keys())[0]
             self._switch_panel(first_key)
 
@@ -182,17 +186,23 @@ class MainWindow(QMainWindow):
         # 连接控制栏按钮 → RunBridge（启停/暂停/恢复）
         self._connect_control_bar()
 
+        # 设置面板 → 绑定 LogPanel（日志级别 / 自动滚动 / 字体大小 实时生效）
+        _settings = self.panels.get("config")
+        if _settings is not None:
+            _ui_panel = getattr(_settings, 'ui_panel', None)
+            if _ui_panel is not None and hasattr(_ui_panel, 'bind_log_panel'):
+                _ui_panel.bind_log_panel(self.log_panel)
+
     def _create_panels(self) -> None:
         """创建全部 12 个面板（§5.1）"""
         panels = [
             ("game_task", "游戏任务", GameTaskPanel(param_bridge=self._param_bridge)),
             ("task_queue", "任务队列", TaskQueuePanel()),
             ("task_manager", "任务管理", TaskManagerPanel(param_bridge=self._param_bridge)),
-            ("config", "配置", ConfigPanel(param_bridge=self._param_bridge)),
+            ("config", "设置", SettingsPanel(param_bridge=self._param_bridge)),
             ("image", "素材管理", ImageManagerPanel(param_bridge=self._param_bridge)),
-            ("accounts", "小号管理", SubAccountPanel()),
+            ("accounts", "小号管理", SubAccountPanel(param_bridge=self._param_bridge)),
             ("history", "执行历史", ExecutionHistoryPanel()),
-            ("ui_settings", "UI 设置", UISettingsPanel()),
         ]
         for key, title, widget in panels:
             self.panels[key] = widget
@@ -491,16 +501,32 @@ class MainWindow(QMainWindow):
                     invalid = task.get_invalid_tasks()
         except Exception:
             pass
-        # 合并去重：运行时队列优先，再补调度 DUE 任务
+        # 合并去重：运行时队列优先，再补调度 DUE 任务（seen 去重，避免 str/dict 混重）
         # 关键：正在执行的任务（current）只显示在「正在执行」区，不进「待执行」区
         # （执行中任务的 next_run 尚未被 mark_done 清空，调度器仍判定其到期）
-        pending = [n for n in runtime_q if n != current]
+        pending = []
+        seen: set = set()
+        for n in runtime_q:
+            if n != current and n not in seen:
+                pending.append(n)
+                seen.add(n)
         for d in due:
             name = d.get("name", str(d)) if isinstance(d, dict) else str(d)
-            if name == current or name in pending:
+            if name == current or name in seen:
                 continue
             pending.append(d)
+            seen.add(name)
+        # 总体进度：当前任务 BattleLoop 场次进度（无则 0）
+        prog = 0
+        if self._param_bridge and hasattr(self._param_bridge, 'run') \
+                and hasattr(self._param_bridge.run, 'get_current_progress'):
+            try:
+                prog = int(self._param_bridge.run.get_current_progress() or 0)
+            except Exception:
+                prog = 0
         self.ui_update.emit(lambda: panel.update_panel(current, pending, upcoming, invalid))
+        if hasattr(panel, 'set_progress'):
+            self.ui_update.emit(lambda: panel.set_progress(prog))
 
     def _on_manual_trigger(self, task_name: str) -> None:
         """手动触发触发式任务（trigger）：UI"⚡触发"按钮 → TaskBridge.update_next_run(name, now)。
@@ -574,6 +600,8 @@ class MainWindow(QMainWindow):
 
     def _on_run_stopped(self) -> None:
         self.ui_update.emit(lambda: self.control_bar.set_running(False))
+        # 中断时同步游戏任务配置页「下次执行」（任务可能 mark_done 推进了 next_run）
+        self.ui_update.emit(lambda: self._sync_game_next_run())
 
     def _on_run_paused(self) -> None:
         self.ui_update.emit(lambda: self.control_bar.set_paused(True))
@@ -609,6 +637,19 @@ class MainWindow(QMainWindow):
         # 队列三区统一由 _refresh_queue_panel 重建（含"正在执行任务排除"），
         # 不再直接 refresh_queue，避免执行中任务闪现进待执行区
         self._refresh_queue_panel()
+        # 任务执行完（mark_done 已推进 next_run，SCHEDULE_UPDATED 在其后发布）
+        # → 实时同步游戏任务配置页「下次执行」
+        self._sync_game_next_run()
+
+    def _sync_game_next_run(self) -> None:
+        """同步游戏任务配置页「下次执行」输入框（任务执行完/中断后）"""
+        game_panel = self.panels.get("game_task")
+        if game_panel is None or not hasattr(game_panel, 'refresh_next_run_time'):
+            return
+        try:
+            game_panel.refresh_next_run_time()
+        except Exception:
+            pass
 
     def _on_log_record(self, **kw: Any) -> None:
         """日志记录 → 追加到日志面板（投递主线程，§3.1）"""

@@ -14,8 +14,8 @@ from typing import Any
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
-    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog,
-    QLabel, QListWidget, QMessageBox, QPushButton, QScrollArea,
+    QDialog, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
+    QInputDialog, QLabel, QListWidget, QMessageBox, QPushButton, QScrollArea,
     QVBoxLayout, QWidget,
 )
 
@@ -29,6 +29,90 @@ _TASK_TYPE_LABELS = {
 }
 
 
+class AssetPickerDialog(QDialog):
+    """从统一图片库（assets/）选择一张图片。
+
+    左侧列出全部图片（相对 assets/ 的引用路径），右侧预览；
+    确定后 selected() 返回选中的引用路径。
+    """
+
+    def __init__(self, parent=None, assets_dir: str | Path | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("选择控制素材（素材管理已添加）")
+        self.resize(680, 480)
+        self._selected_rel: str | None = None
+        self._images: list[dict] = []
+
+        from core.asset_catalog import AssetCatalog
+        base = Path(assets_dir) if assets_dir else Path(__file__).resolve().parents[2] / "assets"
+        catalog = AssetCatalog(base)
+        # 任务引用的都是"控制素材"（tasks/_shared/ 按钮/控件）；识图素材由场景识别模块统一处理
+        self._images = catalog.list_shared_images()
+
+        layout = QVBoxLayout(self)
+        mid = QHBoxLayout()
+
+        # 左：图片列表
+        left = QVBoxLayout()
+        left.addWidget(QLabel("图片（引用路径）"))
+        self.list_widget = QListWidget()
+        for img in self._images:
+            self.list_widget.addItem(img["rel"])
+        self.list_widget.currentRowChanged.connect(self._on_row_changed)
+        left.addWidget(self.list_widget)
+        mid.addLayout(left, 2)
+
+        # 右：预览
+        right = QVBoxLayout()
+        right.addWidget(QLabel("预览"))
+        self.preview = QLabel("（选择图片预览）")
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setStyleSheet("border:1px solid #555; background:#222; color:#888;")
+        self.preview.setMinimumSize(280, 320)
+        right.addWidget(self.preview, 1)
+        self.info = QLabel("")
+        self.info.setWordWrap(True)
+        self.info.setStyleSheet("color:#aaa;")
+        right.addWidget(self.info, 0)
+        mid.addLayout(right, 2)
+
+        layout.addLayout(mid)
+
+        # 按钮
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btn_ok = QPushButton("选择")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        layout.addLayout(btns)
+
+        if self._images:
+            self.list_widget.setCurrentRow(0)
+
+    def _on_row_changed(self, row: int) -> None:
+        if row < 0 or row >= len(self._images):
+            return
+        img = self._images[row]
+        # 去扩展名：配置的是识别素材名（与 images 映射/Executor 解析一致）
+        rel = img["rel"]
+        name = rel.rsplit("/", 1)[-1]
+        if "." in name:
+            rel = rel.rsplit(".", 1)[0]
+        self._selected_rel = rel
+        pix = QPixmap(img["abs"])
+        if not pix.isNull():
+            self.preview.setPixmap(pix.scaled(
+                self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.info.setText(f"引用路径: {img['rel']}\n文件: {img['abs']}\n大小: {img['size']} B")
+
+    def selected(self) -> str | None:
+        """返回选中的素材识别名（去扩展名，相对 assets/）"""
+        return self._selected_rel
+
+
 class TaskManagerPanel(QWidget):
     """任务文件管理面板（列表 + 详情 + 新建/删除/打开/导入导出）"""
 
@@ -38,7 +122,9 @@ class TaskManagerPanel(QWidget):
         self._current_name: str = ""
         self._current_is_generic: bool = False
         self._detail_labels: dict[str, QLabel] = {}
-        self._detail_images: list[dict] = []
+        # §5.2 图片映射编辑态（ref → 素材路径）与所属任务
+        self._images_editing: dict[str, str] = {}
+        self._images_task: str = ""
 
         layout = QHBoxLayout(self)
 
@@ -223,69 +309,88 @@ class TaskManagerPanel(QWidget):
             self._detail_labels[label] = vl
         self.detail_layout.addWidget(g)
 
-        # ── 任务图片区（core/asset_catalog.py 约定）──
-        from core.asset_catalog import AssetCatalog
-        catalog = AssetCatalog(Path(__file__).resolve().parents[2] / "assets")
-        if is_generic:
-            imgs = catalog.list_shared_images()
-            folder = catalog.shared_dir()
-            pic_title = "通用共享图片（tasks/_shared/）"
+        # ── 🎯 图片设置（逻辑名 → 素材路径，§5.2）──
+        # 列出任务代码引用的图片清单，可逐张从素材管理已添加的图片中选择/清除
+        # （统一在「素材管理」添加图片；识图素材由场景识别模块处理，任务只引用控制素材）
+        g3, map_content = panel_group("🎯 图片设置（逻辑名 → 素材）")
+        ml = map_content
+        # 切换任务时重置编辑态；同任务重渲染保留已选未存项
+        if self._images_task != name:
+            self._images_editing = {}
+            self._images_task = name
+        refs_data: list[dict] = []
+        bridge = self._param_bridge
+        if bridge and hasattr(bridge, 'task') and hasattr(bridge.task, 'get_task_asset_refs'):
+            try:
+                refs_data = bridge.task.get_task_asset_refs(name)
+            except Exception:
+                refs_data = []
+        for item in refs_data:
+            ref = item.get("ref", "")
+            if not ref:
+                continue
+            if ref not in self._images_editing:
+                mapped = item.get("mapped")
+                if mapped:
+                    self._images_editing[ref] = str(mapped)
+            cur_text = self._images_editing.get(ref) or "未设置（用逻辑名直接识别）"
+            row = QWidget()
+            rh = QHBoxLayout(row)
+            rh.setContentsMargins(0, 0, 0, 0)
+            lbl_ref = QLabel(ref)
+            lbl_ref.setToolTip("任务代码中引用的素材名（逻辑名）")
+            rh.addWidget(lbl_ref, 2)
+            lbl_cur = QLabel(cur_text)
+            lbl_cur.setWordWrap(True)
+            lbl_cur.setStyleSheet("color:#999;")
+            rh.addWidget(lbl_cur, 3)
+            btn_pick = QPushButton("选图")
+            btn_pick.clicked.connect(lambda _=False, r=ref: self._pick_image(r))
+            btn_clear = QPushButton("清除")
+            btn_clear.clicked.connect(lambda _=False, r=ref: self._clear_image(r))
+            rh.addWidget(btn_pick)
+            rh.addWidget(btn_clear)
+            ml.addWidget(row)
+        if not refs_data:
+            ml.addWidget(QLabel("（未在任务代码中发现图片引用）"))
         else:
-            imgs = catalog.list_task_images(name)
-            folder = catalog.task_dir(name)
-            pic_title = f"任务图片（tasks/{name}/）"
-        self._detail_images = imgs
-
-        g2, pic_content = panel_group(pic_title)
-        gv = pic_content
-        img_list = QListWidget()
-        img_list.currentRowChanged.connect(self._on_detail_image_selected)
-        # 固定高度：避免详情滚动区内再嵌套长列表滚动条
-        img_list.setFixedHeight(110)
-        for img in imgs:
-            img_list.addItem(img["name"])
-        gv.addWidget(img_list)
-        self._detail_img_preview = QLabel("（选择图片预览）")
-        self._detail_img_preview.setAlignment(Qt.AlignCenter)
-        self._detail_img_preview.setStyleSheet(
-            "border:1px solid #555; background:#222; color:#888;")
-        self._detail_img_preview.setFixedHeight(120)
-        gv.addWidget(self._detail_img_preview)
-        self._detail_img_info = QLabel(f"共 {len(imgs)} 张 · 目录 {folder}")
-        self._detail_img_info.setWordWrap(True)
-        self._detail_img_info.setStyleSheet("color:#aaa;")
-        gv.addWidget(self._detail_img_info)
-        btn_open = QPushButton("📂 打开图片文件夹")
-        btn_open.clicked.connect(lambda: self._open_detail_folder(folder))
-        gv.addWidget(btn_open)
-        self.detail_layout.addWidget(g2)
+            btn_save_img = QPushButton("💾 保存图片配置")
+            btn_save_img.clicked.connect(self._save_images)
+            ml.addWidget(btn_save_img)
+        self.detail_layout.addWidget(g3)
 
         self.detail_layout.addStretch()
 
-    def _on_detail_image_selected(self, row: int) -> None:
-        """详情图片区：选中 → 预览 + 引用路径"""
-        if row < 0 or row >= len(self._detail_images):
-            return
-        img = self._detail_images[row]
-        if hasattr(self, "_detail_img_preview"):
-            pix = QPixmap(img["abs"])
-            if not pix.isNull():
-                self._detail_img_preview.setPixmap(pix.scaled(
-                    self._detail_img_preview.size(),
-                    Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        if hasattr(self, "_detail_img_info"):
-            self._detail_img_info.setText(
-                f"引用路径: {img['rel']}\n文件: {img['abs']}")
+    # ── §5.2 图片设置操作 ─────────────────────────────────
 
-    def _open_detail_folder(self, folder) -> None:
-        """打开任务图片文件夹（不存在则自动创建，系统文件管理器）"""
-        import os
-        from core.asset_catalog import open_in_file_manager
-        ok = open_in_file_manager(folder, create=True)
-        if not ok:
-            QMessageBox.warning(
-                self, "打开失败",
-                f"无法打开目录：{os.path.relpath(folder)}\n（目录不存在或系统无文件管理器）")
+    def _pick_image(self, ref: str) -> None:
+        """为逻辑名选择一张素材图片（从统一图片库）"""
+        dlg = AssetPickerDialog(self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        rel = dlg.selected()
+        if not rel:
+            return
+        self._images_editing[ref] = rel
+        # 同任务内重渲染详情，保留编辑态
+        self._render_detail(self._get_detail(self._current_name))
+
+    def _clear_image(self, ref: str) -> None:
+        """清除逻辑名的素材映射（回退为逻辑名直接识别）"""
+        self._images_editing.pop(ref, None)
+        self._render_detail(self._get_detail(self._current_name))
+
+    def _save_images(self) -> None:
+        """保存图片映射到 tasks.yaml 的 images 字段（§5.2）"""
+        bridge = self._param_bridge
+        if not (bridge and hasattr(bridge, 'task')):
+            QMessageBox.warning(self, "保存失败", "未连接到任务配置。")
+            return
+        try:
+            bridge.task.save_task_images(self._current_name, dict(self._images_editing))
+            QMessageBox.information(self, "成功", "图片配置已保存到 tasks.yaml。")
+        except Exception as e:
+            QMessageBox.warning(self, "保存失败", str(e))
 
     # ── 操作（经 TaskBridge → TaskManager） ─────────────────
 

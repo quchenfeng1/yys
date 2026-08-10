@@ -13,20 +13,20 @@ from typing import Any
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QPushButton, QScrollArea, QSpinBox,
-    QTabWidget, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QListWidget, QPushButton, QScrollArea,
+    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
-# 设计书 §5.2 重复规则（on_enter 由配置文件直接设置，不在表单下拉）
+# 设计书 §5.2 重复规则（单次任务两种模式：每次启动执行 on_enter / 只执行一次 once）
+# special / expire_at 已从下拉移除（与 daily/active_range 重叠），代码层保留兼容旧配置
 REPEAT_TYPES = [
     ("daily", "每日"),
     ("weekly", "每周"),
     ("monthly_start", "每月初"),
     ("interval_days", "间隔N天"),
     ("interval_hours", "间隔N小时"),
-    ("once", "单次"),
-    ("expire_at", "依赖外部失效"),
-    ("special", "活动窗口"),
+    ("on_enter", "每次启动执行"),
+    ("once", "只执行一次"),
     ("trigger", "特殊条件触发"),
 ]
 
@@ -40,7 +40,8 @@ class GameTaskPanel(QWidget):
         self._current_name: str = ""
         self._form_widgets: dict[str, Any] = {}
         self._loaded_next_run: str = ""  # 渲染表单时系统显示的 next_run（区分手动修改）
-        self._slot_rows: list = []  # 执行时段动态行 [[开始QLineEdit, 结束QLineEdit], ...]
+        self._slot_rows: list = []  # 执行时段动态行 [[开始QLineEdit, 结束QLineEdit], ...]（读取用）
+        self._slot_row_widgets: list = []  # 执行时段每行容器 QWidget（整体显隐用，含✕删除按钮）
         self._slot_container: Any = None
 
         layout = QHBoxLayout(self)
@@ -109,6 +110,77 @@ class GameTaskPanel(QWidget):
                 pass
         return {"name": name, "display_name": name}
 
+    def refresh_next_run_time(self) -> None:
+        """
+        实时同步「下次执行」输入框（任务执行完/被中断后，由 MainWindow 调用）。
+
+        从调度器查询最新 next_run_time 更新到输入框与 _loaded_next_run；
+        若用户正在手动编辑（输入框内容 ≠ 已加载值）则跳过，避免覆盖编辑中的内容
+        （保存时 _save 会走 update_next_run 手动指定路径）。
+        """
+        if not self._current_name:
+            return
+        ed = self._form_widgets.get("next_run_time")
+        if ed is None:
+            return
+        bridge = self._param_bridge
+        if not (bridge and hasattr(bridge, 'task')
+                and hasattr(bridge.task, 'get_next_run_time')):
+            return
+        # 用户正在手动编辑 → 跳过（防止实时同步覆盖手输值）
+        cur_text = ed.text().strip()
+        if cur_text and cur_text != self._loaded_next_run:
+            return
+        try:
+            nrt = bridge.task.get_next_run_time(self._current_name)
+            new_text = nrt or ""
+            if new_text != self._loaded_next_run:
+                ed.setText(new_text)
+                self._loaded_next_run = new_text
+        except Exception:
+            pass
+
+    def _get_signal_options(self) -> list[tuple[str, str]]:
+        """从素材管理读取 scene/ 识图素材配置的识别信号列表。
+
+        返回 [(信号名, 素材识别名), ...]，供触发模板多选下拉使用。
+        """
+        try:
+            from core.asset_meta import AssetMetaStore
+            from pathlib import Path
+            assets_dir = Path(__file__).resolve().parents[2] / "assets"
+            meta = AssetMetaStore(assets_dir)
+            # all_signals: {素材识别名: 信号名}
+            return [(sig, rel) for rel, sig in meta.all_signals().items() if sig]
+        except Exception:
+            return []
+
+    def _get_sub_options(self) -> list[tuple[str, str]]:
+        """
+        从「小号管理」（AccountBridge）读取启用的 sub 账号。
+        返回 [(account_id, 显示名), ...]；无账号管理数据时返回空列表。
+        """
+        bridge = self._param_bridge
+        if not (bridge and hasattr(bridge, 'account')):
+            return []
+        try:
+            accounts = bridge.account.get_all_accounts()
+        except Exception:
+            return []
+        opts: list[tuple[str, str]] = []
+        for a in accounts or []:
+            role = getattr(a, 'role', None)
+            if role != "sub":
+                continue
+            if not getattr(a, 'enabled', True):
+                continue
+            aid = getattr(a, 'account_id', '') or ''
+            if not aid:
+                continue
+            name = getattr(a, 'name', '') or aid
+            opts.append((aid, f"{name}（{aid}）"))
+        return opts
+
     # ── 动态表单渲染（设计书 §4.2 预览） ──────────────────
 
     def _clear_form(self) -> None:
@@ -159,24 +231,55 @@ class GameTaskPanel(QWidget):
         f_sched = QFormLayout()
         sched_content.addLayout(f_sched)
 
+        # 重复规则：下拉选框（选择后联动显隐对应属性区）
+        repeat = detail.get("repeat") or {}
+        rep_type = repeat.get("type", "daily") if isinstance(repeat, dict) else "daily"
+        lbl_repeat = QLabel("重复规则:")
         cb_repeat = QComboBox()
         for val, label in REPEAT_TYPES:
             cb_repeat.addItem(label, val)
-        repeat = detail.get("repeat") or {}
-        rep_type = repeat.get("type", "daily") if isinstance(repeat, dict) else "daily"
         idx = cb_repeat.findData(rep_type)
         cb_repeat.setCurrentIndex(idx if idx >= 0 else 0)
-        f_sched.addRow("重复规则:", cb_repeat)
+        f_sched.addRow(lbl_repeat, cb_repeat)
         w["repeat_type"] = cb_repeat
+        w["repeat_type_label"] = lbl_repeat
+        # 切换 → 联动显隐
+        cb_repeat.currentIndexChanged.connect(self._update_repeat_fields)
 
-        # 触发模板（trigger 专属，识别列表）
-        _tt_label = QLabel("触发模板:")
-        ed_tt = QLineEdit()
-        ed_tt.setPlaceholderText("逗号分隔素材模板名，如 trigger/activity_enter, trigger/red_dot")
+        # 触发模板（trigger 专属）：优先信号名多选下拉（素材管理 scene/ 配置的 signal），
+        # 无可用信号时回退自由文本输入（兼容旧素材路径写法）。
+        _tt_label = QLabel("触发信号:")
         _rep_tt = (repeat.get("trigger_templates") if isinstance(repeat, dict)
                    else getattr(repeat, 'trigger_templates', None)) or []
-        if _rep_tt:
-            ed_tt.setText(", ".join(_rep_tt))
+        _signals = self._get_signal_options()  # [(信号名, 素材识别名)]
+        if _signals:
+            from ui.widgets.multi_select_combo import MultiSelectCombo
+            ed_tt = MultiSelectCombo()
+            # data=信号名（保存进 trigger_templates），label 显示"信号名（素材名）"
+            items = [(sig, f"{sig}（{rel}）") for sig, rel in _signals]
+            sig_names = {sig for sig, _ in _signals}
+            rel_by_sig = {rel: sig for sig, rel in _signals}
+            # 兼容旧配置：非信号名的旧值（素材路径）补入选项，避免保存时丢字段
+            for t in _rep_tt:
+                if t and t not in sig_names and t not in rel_by_sig:
+                    items.append((t, f"{t}（旧素材路径）"))
+            ed_tt.set_items(items)
+            # 回显：信号名直接勾选；素材路径 → 若对应素材有信号名则用信号名勾选，否则原样勾选
+            checked = []
+            for t in _rep_tt:
+                if t in sig_names:
+                    checked.append(t)
+                elif t in rel_by_sig:
+                    checked.append(rel_by_sig[t])
+                elif t:
+                    checked.append(t)
+            ed_tt.set_selected(checked)
+            ed_tt.setPlaceholderText("选择识别信号（素材管理 scene/ 素材已配置）")
+        else:
+            ed_tt = QLineEdit()
+            ed_tt.setPlaceholderText("逗号分隔素材名，如 trigger/activity_enter（素材管理配置信号后可选）")
+            if _rep_tt:
+                ed_tt.setText(", ".join(_rep_tt))
         f_sched.addRow(_tt_label, ed_tt)
         _tt_label.setVisible(False)
         ed_tt.setVisible(False)
@@ -202,19 +305,39 @@ class GameTaskPanel(QWidget):
                 [repeat["weekday"]] if repeat.get("weekday") is not None else None)
         for val, _cb in wd_checks.items():
             _cb.setChecked(rep_weekdays is not None and val in rep_weekdays)
-        f_sched.addRow("每周几:", wd_widget)
+        lbl_weekday = QLabel("每周几:")
+        f_sched.addRow(lbl_weekday, wd_widget)
+        w["weekday_label"] = lbl_weekday
         w["weekday"] = wd_widget
         w["weekday_checks"] = wd_checks
 
-        # 间隔值（interval_days/interval_hours 专属）
+        # 间隔值（interval_days/interval_hours 专属，label 按类型动态）
         sp_interval = QSpinBox()
         sp_interval.setRange(1, 9999)
         sp_interval.setValue(int((repeat.get("value") or 1) if isinstance(repeat, dict) else 1))
-        f_sched.addRow("间隔值:", sp_interval)
+        sp_interval.setToolTip("间隔N小时：与执行时段组合时，在时段内每隔 N 小时触发一次；\n"
+                               "超出当前时段自动跳到下一时段起点。")
+        lbl_interval = QLabel("间隔值:")
+        f_sched.addRow(lbl_interval, sp_interval)
+        w["interval_label"] = lbl_interval
         w["interval"] = sp_interval
+
+        # 每月几号（monthly_start 专属，1~28）
+        sp_month = QSpinBox()
+        sp_month.setRange(1, 28)
+        sp_month.setValue(int((repeat.get("monthly_day") if isinstance(repeat, dict)
+                               else 1) or 1))
+        sp_month.setToolTip("每月第几天执行（1~28）")
+        lbl_month = QLabel("每月几号:")
+        f_sched.addRow(lbl_month, sp_month)
+        lbl_month.setVisible(False)
+        sp_month.setVisible(False)
+        w["monthly_day_label"] = lbl_month
+        w["monthly_day"] = sp_month
 
         # ── 执行时段（1 个 = time_start/time_end；2+ 个 = time_slots） ──
         self._slot_rows = []
+        self._slot_row_widgets = []
         self._slot_container = QVBoxLayout()
         slots = detail.get("time_slots") or []
         if len(slots) >= 2:
@@ -223,7 +346,8 @@ class GameTaskPanel(QWidget):
         else:
             self._add_slot_row(detail.get("time_start") or "06:00",
                                detail.get("time_end") or "23:59")
-        f_sched.addRow("执行时段:", self._slot_container)
+        lbl_slot = QLabel("执行时段:")
+        f_sched.addRow(lbl_slot, self._slot_container)
         btn_add_slot = QPushButton("➕ 添加时段")
         slot_holder = QWidget()
         sh = QHBoxLayout(slot_holder)
@@ -232,60 +356,74 @@ class GameTaskPanel(QWidget):
         sh.addStretch(1)
         btn_add_slot.clicked.connect(lambda: self._add_slot_row("", ""))
         f_sched.addRow("", slot_holder)
+        w["slot_label"] = lbl_slot
+        w["slot_holder"] = slot_holder
         w["add_slot_btn"] = btn_add_slot
 
         sp_daily = QSpinBox()
         sp_daily.setRange(0, 999)
         sp_daily.setSpecialValueText("不限")
         sp_daily.setValue(int(detail.get("max_daily") or 0))
-        f_sched.addRow("每日上限:", sp_daily)
+        sp_daily.setToolTip("任务在活动周期内被触发的次数上限（0=不限）。\n"
+                            "每次触发会执行包含循环体在内的全部步骤直到任务完成；\n"
+                            "达到该次数后任务进入失效区。")
+        lbl_daily = QLabel("周期触发次数:")
+        f_sched.addRow(lbl_daily, sp_daily)
+        w["max_daily_label"] = lbl_daily
         w["max_daily"] = sp_daily
 
         # 活动有效期（active_range，如 7/21–10/1）
         ar = detail.get("active_range") or []
         ed_ar_start = QLineEdit(str(ar[0]) if ar and ar[0] else "")
         ed_ar_start.setPlaceholderText("YYYY-MM-DD 留空不限")
-        f_sched.addRow("开始日期:", ed_ar_start)
+        lbl_ar_start = QLabel("开始日期:")
+        f_sched.addRow(lbl_ar_start, ed_ar_start)
+        w["active_start_label"] = lbl_ar_start
         w["active_range_start"] = ed_ar_start
         ed_ar_end = QLineEdit(str(ar[1]) if len(ar) > 1 and ar[1] else "")
         ed_ar_end.setPlaceholderText("YYYY-MM-DD 留空不限")
-        f_sched.addRow("结束日期:", ed_ar_end)
+        lbl_ar_end = QLabel("结束日期:")
+        f_sched.addRow(lbl_ar_end, ed_ar_end)
+        w["active_end_label"] = lbl_ar_end
         w["active_range_end"] = ed_ar_end
 
-        # 累计次数（活动期累计上限）
+        # 活动循环次数（循环体循环次数上限；每轮循环成功 +1，显示累计，达到 → 失效区）
         sp_total = QSpinBox()
         sp_total.setRange(0, 999999)
         sp_total.setSpecialValueText("不限")
         sp_total.setValue(int(detail.get("total_count") or 0))
-        f_sched.addRow("累计次数:", sp_total)
+        sp_total.setToolTip("循环体循环次数上限（0=不限）。\n"
+                            "每完成一轮循环累计一次，右侧显示累计循环次数；\n"
+                            "累计达到该上限后任务进入失效区。")
+        lbl_total = QLabel("活动循环次数:")
+        total_holder = QWidget()
+        th = QHBoxLayout(total_holder)
+        th.setContentsMargins(0, 0, 0, 0)
+        th.setSpacing(6)
+        th.addWidget(sp_total)
+        lbl_cycle_done = QLabel("")
+        th.addWidget(lbl_cycle_done)
+        th.addStretch(1)
+        f_sched.addRow(lbl_total, total_holder)
+        w["total_label"] = lbl_total
         w["total_count"] = sp_total
-
-        # 重复规则类型切换 → 联动启用/禁用
-        cb_repeat.currentIndexChanged.connect(self._update_repeat_fields)
+        w["cycle_done_label"] = lbl_cycle_done
 
         te.addWidget(g_sched)
 
-        # ── 📊 执行模式（必配，设计书 §5.2 execution_mode） ──
-        g_freq, freq_content = panel_group("📊 执行模式（必配）")
+        # ── 📊 循环次数（任务循环体执行几次） ──
+        g_freq, freq_content = panel_group("📊 循环次数")
         f_freq = QFormLayout()
         freq_content.addLayout(f_freq)
-
-        # 执行模式：按天执行一次 / 每时间段各执行一次
-        cb_mode = QComboBox()
-        cb_mode.addItem("按天执行（一天一次）", "daily")
-        cb_mode.addItem("按时间段执行（每时段各一次）", "per_slot")
-        er_mode = detail.get("execution_mode") or "daily"
-        idx = cb_mode.findData(er_mode)
-        cb_mode.setCurrentIndex(idx if idx >= 0 else 0)
-        f_freq.addRow("执行模式:", cb_mode)
-        w["execution_mode"] = cb_mode
 
         sp_loop = QSpinBox()
         sp_loop.setRange(1, 999)
         # 调度器优先读取 repeat.loop_count，表单显示也优先 repeat 内值，保持同步
         rep_loop = repeat.get("loop_count") if isinstance(repeat, dict) else None
         sp_loop.setValue(int(rep_loop or detail.get("loop_count") or 1))
-        f_freq.addRow("每轮循环:", sp_loop)  # 任务体内 BattleLoop 次数
+        sp_loop.setToolTip("任务的循环体执行几次（每次触发跑几轮战斗等）\n"
+                           "与「周期最大触发次数」（每天触发几次）不同，二者相乘为周期总工作量。")
+        f_freq.addRow("循环次数:", sp_loop)
         w["loop_count"] = sp_loop
 
         te.addWidget(g_freq)
@@ -390,6 +528,34 @@ class GameTaskPanel(QWidget):
                 w["stamina_required"] = sp_stamina
                 tb.addWidget(g_sta)
 
+            # ── 👥 组队配置（主号带队带小号刷副本，§3.10 组队协调） ──
+            g_coop, coop_content = panel_group("👥 组队配置（带小号刷副本）")
+            f_coop = QFormLayout()
+            coop_content.addLayout(f_coop)
+            _teaming = detail.get("teaming") if isinstance(detail.get("teaming"), dict) else {}
+            # 组队小号：优先从「小号管理」多选下拉；无小号数据时回退文本输入
+            sub_options = self._get_sub_options()
+            if sub_options:
+                from ui.widgets.multi_select_combo import MultiSelectCombo
+                ed_subs = MultiSelectCombo()
+                ed_subs.set_items(sub_options)
+                saved = _teaming.get("sub_ids") or []
+                ed_subs.set_selected([s for s in saved
+                                      if any(s == d for d, _ in sub_options)])
+            else:
+                ed_subs = QLineEdit(", ".join(_teaming.get("sub_ids") or []) if _teaming else "")
+                ed_subs.setPlaceholderText("如 sub1, sub2（留空不组队；菜单「小号管理」添加小号后可选）")
+            f_coop.addRow("组队小号:", ed_subs)
+            w["teaming_sub_ids"] = ed_subs
+            # 说明：当前仅支持主号带队（大号创建队伍，小号接受邀请+准备）
+            # 轮数复用上方「每轮循环」（loop_count），不单独配置
+            lbl_coop = QLabel("主号带队（大号创建队伍，小号接受邀请+准备）\n"
+                              "组队轮数 = 上方「每轮循环」（每次触发打几轮）")
+            lbl_coop.setWordWrap(True)
+            lbl_coop.setStyleSheet("color: #888; font-size: 12px;")
+            f_coop.addRow("说明:", lbl_coop)
+            tb.addWidget(g_coop)
+
             tb.addStretch(1)
             tabs.addTab(tab_battle, "⚔ 战斗配置")
 
@@ -402,6 +568,8 @@ class GameTaskPanel(QWidget):
 
         # 初始化重复规则联动状态
         self._update_repeat_fields()
+        # 刷新「活动循环次数」累计显示（已循环 x/y）
+        self._refresh_cycle_done()
 
         self.form_layout.addStretch()
 
@@ -409,7 +577,9 @@ class GameTaskPanel(QWidget):
 
     def _add_slot_row(self, start: str = "", end: str = "") -> None:
         """添加一行执行时段（开始 ~ 结束）"""
-        row = QHBoxLayout()
+        row_widget = QWidget()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 0, 0, 0)
         ed_s = QLineEdit(start)
         ed_s.setPlaceholderText("HH:MM")
         ed_s.setMaximumWidth(80)
@@ -428,72 +598,143 @@ class GameTaskPanel(QWidget):
         row.addWidget(ed_e)
         row.addWidget(btn_del)
         row.addStretch(1)
-        self._slot_container.addLayout(row)
+        self._slot_container.addWidget(row_widget)
         self._slot_rows.append(pair)
-        btn_del.clicked.connect(lambda: self._remove_slot_row(row, pair))
+        self._slot_row_widgets.append(row_widget)
+        btn_del.clicked.connect(lambda: self._remove_slot_row(row_widget, pair))
+        # 时段数量变化 → 重新评估执行模式（多时段强制 per_slot）
+        self._update_repeat_fields()
 
-    def _remove_slot_row(self, row: QHBoxLayout, pair: list) -> None:
+    def _remove_slot_row(self, row_widget: QWidget, pair: list) -> None:
         """删除一行执行时段（至少保留一行）"""
         if len(self._slot_rows) <= 1:
             return
         for i in range(self._slot_container.count()):
             item = self._slot_container.itemAt(i)
-            if item is not None and item.layout() is row:
+            if item is not None and item.widget() is row_widget:
                 self._slot_container.removeItem(item)
                 break
-        while row.count():
-            item = row.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        row_widget.deleteLater()
         if pair in self._slot_rows:
             self._slot_rows.remove(pair)
+        if row_widget in self._slot_row_widgets:
+            self._slot_row_widgets.remove(row_widget)
+        # 时段数量变化 → 重新评估执行模式（单时段可自由切换 daily/per_slot）
+        self._update_repeat_fields()
 
-    # ── 重复规则联动 ────────────────────────────────────────
+    # ── 重复规则联动（下拉选框）─────────────────────────
+
+    def _refresh_cycle_done(self) -> None:
+        """刷新「活动循环次数」累计显示（已循环 x/y 轮）。
+
+        从调度器读取活动循环累计进度（record_cycle 每轮循环 +1），
+        显示在活动循环次数输入框右侧；未设置上限时仅显示累计值。
+        """
+        if not self._current_name:
+            return
+        w = self._form_widgets
+        lbl = w.get("cycle_done_label")
+        if lbl is None:
+            return
+        bridge = self._param_bridge
+        cur, limit = 0, None
+        if bridge and hasattr(bridge, 'task') and hasattr(bridge.task, 'get_cycle_progress'):
+            try:
+                cur, limit = bridge.task.get_cycle_progress(self._current_name)
+            except Exception:
+                cur, limit = 0, None
+        if limit is not None:
+            lbl.setText(f"已循环 {cur}/{limit} 轮")
+            lbl.setStyleSheet("color:#888; font-size:12px;")
+            if cur >= limit:
+                lbl.setStyleSheet("color:#e53935; font-size:12px;")
+        elif cur:
+            lbl.setText(f"已循环 {cur} 轮")
+            lbl.setStyleSheet("color:#888; font-size:12px;")
+        else:
+            lbl.setText("")
+
+    def _current_repeat_type(self) -> str:
+        """当前选中的重复规则类型（下拉选框）"""
+        rt = self._form_widgets.get("repeat_type")
+        if rt is not None:
+            try:
+                return rt.currentData() or "daily"
+            except Exception:
+                return "daily"
+        return "daily"
 
     def _update_repeat_fields(self, *args) -> None:
-        """根据重复规则类型启用/禁用 每周几 / 间隔值 / 时段 / 执行模式 / 触发模板"""
+        """按重复规则类型显隐对应属性区（下拉选框联动）。
+
+        每类规则只展示其相关属性：
+        每周几(weekday) 仅 weekly
+          间隔值(interval) 仅 interval_days/hours（label 动态"间隔N天/间隔N小时"）
+          trigger          → 触发信号
+        trigger/on_enter/once → 无执行时段
+          周期触发次数 / 活动有效期 / 活动循环次数 → 所有类型展示
+        """
         w = self._form_widgets
-        rt = w.get("repeat_type")
-        if rt is None:
-            return
-        rtype = rt.currentData()
+        rtype = self._current_repeat_type()
         is_trigger = (rtype == "trigger")
+        # 无时间调度的类型：trigger / on_enter（每次启动执行）/ once（只执行一次）
+        no_schedule = rtype in ("trigger", "on_enter", "once")
 
-        wd = w.get("weekday")
-        iv = w.get("interval")
-        if wd is not None:
-            wd.setEnabled(not is_trigger and rtype == "weekly")
-        if iv is not None:
-            iv.setEnabled(not is_trigger and rtype in ("interval_days", "interval_hours"))
-
-        # 触发模板行（trigger 专属，仅 trigger 时显示）
-        for key in ("trigger_templates", "trigger_label"):
+        def _vis(key: str, visible: bool) -> None:
             c = w.get(key)
             if c is not None:
-                c.setVisible(is_trigger)
+                c.setVisible(visible)
 
-        # 时段行（trigger 无时间配置 → 禁用）
-        for pair in getattr(self, "_slot_rows", []) or []:
-            for ed in pair:
-                ed.setEnabled(not is_trigger)
-        add_btn = w.get("add_slot_btn")
-        if add_btn is not None:
-            add_btn.setEnabled(not is_trigger)
+        # 每周几：仅 weekly
+        show_weekly = (rtype == "weekly")
+        _vis("weekday_label", show_weekly)
+        _vis("weekday", show_weekly)
 
-        # 其他时间/次数控件（trigger 禁用）
-        for key in ("max_daily", "active_range_start", "active_range_end",
-                    "total_count", "execution_mode", "loop_count"):
-            c = w.get(key)
-            if c is not None:
-                c.setEnabled(not is_trigger)
+        # 每月几号：仅 monthly_start
+        show_monthly = (rtype == "monthly_start")
+        _vis("monthly_day_label", show_monthly)
+        _vis("monthly_day", show_monthly)
+
+        # 间隔值：interval_days / interval_hours，label 按类型动态
+        show_interval = rtype in ("interval_days", "interval_hours")
+        _vis("interval_label", show_interval)
+        _vis("interval", show_interval)
+        il = w.get("interval_label")
+        if il is not None:
+            if rtype == "interval_days":
+                il.setText("间隔值(天):")
+            elif rtype == "interval_hours":
+                il.setText("间隔值(小时):")
+
+        # 触发信号（trigger 专属）
+        _vis("trigger_label", is_trigger)
+        _vis("trigger_templates", is_trigger)
+
+        # 执行时段：非 trigger/on_enter/once 展示（整行容器含✕删除按钮）
+        _vis("slot_label", not no_schedule)
+        _vis("slot_holder", not no_schedule)
+        for rw in getattr(self, "_slot_row_widgets", []) or []:
+            rw.setVisible(not no_schedule)
+        ab = w.get("add_slot_btn")
+        if ab is not None:
+            ab.setVisible(not no_schedule)
+
+        # 活动有效期：无时间调度（trigger/on_enter/once）隐藏（时间相关，避免遗留）
+        _vis("active_start_label", not no_schedule)
+        _vis("active_range_start", not no_schedule)
+        _vis("active_end_label", not no_schedule)
+        _vis("active_range_end", not no_schedule)
+
+        # 周期触发次数（max_daily）：所有类型展示（含 trigger）——不隐藏
+        # 活动循环次数（total_count）：所有类型展示（含 trigger）——不隐藏
+        # （执行模式 execution_mode 已移除——调度层多时段固定按每时段各执行一次）
 
     # ── 保存（设计书 §5.1 字段写回 tasks.yaml） ────────────
 
     def _collect_config(self) -> dict[str, Any]:
         """收集表单值 → tasks.yaml 配置 dict"""
         w = self._form_widgets
-        rtype = w["repeat_type"].currentData()
+        rtype = self._current_repeat_type()
         repeat_dict: dict[str, Any] = {"type": rtype, "value": 1}
         # 每轮循环也写入 repeat（调度器优先读取 repeat.loop_count）
         repeat_dict["loop_count"] = w["loop_count"].value()
@@ -504,6 +745,8 @@ class GameTaskPanel(QWidget):
             selected = [val for val, _cb in wd_checks.items() if _cb.isChecked()]
             if selected:
                 repeat_dict["weekdays"] = selected
+        elif rtype == "monthly_start":
+            repeat_dict["monthly_day"] = w["monthly_day"].value()
 
         # 活动有效期（两个日期都留空 → 不写）
         ar_start = w["active_range_start"].text().strip()
@@ -512,14 +755,21 @@ class GameTaskPanel(QWidget):
         if ar_start or ar_end:
             active_range = [ar_start or None, ar_end or None]
 
-        # 执行时段：trigger 类型无时间配置；否则 1 行 → time_start/time_end；2+ 行 → time_slots
+        # 执行时段：trigger/on_enter/once 无时间配置；否则 1 行 → time_start/time_end；2+ 行 → time_slots
         is_trigger = (rtype == "trigger")
-        if is_trigger:
+        no_schedule = rtype in ("trigger", "on_enter", "once")
+        if no_schedule:
             # 触发式任务：识别列表写入 repeat.trigger_templates，时间字段全部置空
-            tt = w.get("trigger_templates")
+            # 输入为 MultiSelectCombo（信号名多选）或 QLineEdit（旧文本输入）两种形态
             templates = []
-            if tt is not None:
-                templates = [t.strip() for t in tt.text().split(",") if t.strip()]
+            if is_trigger:
+                tt = w.get("trigger_templates")
+                if tt is not None:
+                    from ui.widgets.multi_select_combo import MultiSelectCombo
+                    if isinstance(tt, MultiSelectCombo):
+                        templates = [str(d) for d in tt.selected_data()]
+                    else:
+                        templates = [t.strip() for t in tt.text().split(",") if t.strip()]
             if templates:
                 repeat_dict["trigger_templates"] = templates
             time_start, time_end, time_slots = None, None, None
@@ -544,12 +794,10 @@ class GameTaskPanel(QWidget):
             "time_start": time_start,
             "time_end": time_end,
             "time_slots": time_slots,
-            "max_daily": None if is_trigger else (w["max_daily"].value() or None),
-            "repeat": repeat_dict,
+            "max_daily": (w["max_daily"].value() or None),  # 周期触发次数（所有类型）
+            "repeat": repeat_dict,  # loop_count 只存 repeat 内（scheduler 优先读取），顶层不再重复存储
             "active_range": None if is_trigger else active_range,
-            "total_count": None if is_trigger else (w["total_count"].value() or None),
-            "execution_mode": w["execution_mode"].currentData(),
-            "loop_count": w["loop_count"].value(),
+            "total_count": (w["total_count"].value() or None),  # 活动循环次数（所有类型，含 trigger）
         }
         if "max_fail_streak" in w:
             config["max_fail_streak"] = w["max_fail_streak"].value()
@@ -577,6 +825,19 @@ class GameTaskPanel(QWidget):
                 config["lock_team"] = w["lock_team"].isChecked()
             if "change_team" in w:
                 config["change_team"] = w["change_team"].isChecked()
+            # 组队配置（主号带队带小号刷副本，§3.10）
+            # 轮数复用「每轮循环」（loop_count），teaming 只存小号列表
+            if "teaming_sub_ids" in w:
+                wid = w["teaming_sub_ids"]
+                from ui.widgets.multi_select_combo import MultiSelectCombo
+                if isinstance(wid, MultiSelectCombo):
+                    subs = wid.selected_data()
+                else:
+                    subs = [s.strip() for s in wid.text().split(",") if s.strip()]
+                if subs:
+                    config["teaming"] = {"sub_ids": subs}
+                else:
+                    config["teaming"] = None
         return config
 
     def _save(self) -> None:
@@ -589,6 +850,15 @@ class GameTaskPanel(QWidget):
         config = self._collect_config()
         try:
             bridge.task.save_task_config(self._current_name, config)
+
+            # 手动更改任务配置 → 重置该任务周期进度（下次从第 1 次开始执行）
+            # （周期任务断点续跑语义：改配置即重新开始一个周期）
+            run_bridge = getattr(bridge, 'run', None)
+            if run_bridge is not None and hasattr(run_bridge, 'reset_task_cycle'):
+                try:
+                    run_bridge.reset_task_cycle(self._current_name)
+                except Exception:
+                    pass
 
             # 下次执行时间输入框
             nrt_widget = self._form_widgets.get("next_run_time")
@@ -620,6 +890,8 @@ class GameTaskPanel(QWidget):
                 self._show_status(f"✅ 已保存 · 下次执行: {nrt}")
             else:
                 self._show_status("✅ 配置已保存")
+            # 保存后刷新累计循环次数显示
+            self._refresh_cycle_done()
         except Exception:
             self._show_status("保存失败")
 

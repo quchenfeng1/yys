@@ -77,6 +77,14 @@ class Executor:
         # 场景感知：上次感知到的场景（去重发布 scene_updated）
         self._last_scene: str | None = None
 
+        # §识图信号：scene/ 素材 → 信号名（{rel: signal}，run_controller 注入）
+        self._signal_map: dict[str, str] = {}
+        self._rel_by_signal: dict[str, str] = {}
+        self._current_signal: str | None = None
+
+        # §5.2 任务图片映射（逻辑名→素材路径），由运行控制中心每次任务执行前注入
+        self._asset_aliases: dict[str, str] = {}
+
         # 设备操作回调（兼容旧版 set_click_handler）
         self._click_handler: Callable[[int, int], bool] | None = None
         self._swipe_handler: Callable[[int, int, int, int, float], bool] | None = None
@@ -174,6 +182,9 @@ class Executor:
         重试循环每轮开头调 recognizer.clear_cache() 确保重新截图。
         """
         start_time = time.time()
+
+        # §5.2 素材别名解析（逻辑名 → 素材路径，未配置时原样）
+        name = self._resolve(name)
 
         while True:
             # 停止检查
@@ -326,11 +337,14 @@ class Executor:
         支持 timeout 重复检测直到超时。
         命中后发布 scene_updated（去重）；全部候选均未匹配时发布 scene_unknown 事件（§5.5）。
         """
+        # §5.2 素材别名解析（逻辑名 → 素材路径）
+        candidates = self._resolve_list(candidates)
         start_time = time.time()
         while True:
             for c in candidates:
                 if self._recognizer.exists(c):
                     self._publish_scene(c)
+                    self._publish_signal(c)
                     return c
 
             if timeout is not None and timeout > 0:
@@ -349,11 +363,14 @@ class Executor:
         静默场景感知：遍历候选场景模板，命中返回场景名并发布 scene_updated；
         未命中返回 None（不发布 scene_unknown）。供场景感知步骤 scene_probe / 运行时定位。
         """
+        # §5.2 素材别名解析（逻辑名 → 素材路径）
+        candidates = self._resolve_list(candidates)
         start_time = time.time()
         while True:
             for c in candidates:
                 if self._recognizer.exists(c):
                     self._publish_scene(c)
+                    self._publish_signal(c)
                     return c
             if timeout is not None and timeout > 0:
                 if time.time() - start_time > timeout:
@@ -371,9 +388,64 @@ class Executor:
             except Exception:
                 pass
 
+    # ── 识图信号（scene/ 素材 → 信号名）────────────────────
+
+    def set_signal_map(self, signal_map: dict | None) -> None:
+        """注入识图信号映射 {素材相对路径: 信号名}（由运行控制中心加载 assets manifest）"""
+        self._signal_map = {str(k): str(v) for k, v in (signal_map or {}).items() if v}
+        self._rel_by_signal = {v: k for k, v in self._signal_map.items()}
+
+    @property
+    def current_signal(self) -> str | None:
+        """最近一次识图命中的信号名（供任务页面判断：if ex.current_signal == '主界面'）"""
+        return self._current_signal
+
+    def _publish_signal(self, rel: str) -> None:
+        """识图素材命中 → 若配置了 signal 则发布 SCENE_SIGNAL 并记录 current_signal"""
+        signal = self._signal_map.get(rel)
+        if not signal:
+            return
+        self._current_signal = signal
+        try:
+            self._bus.publish(Events.SCENE_SIGNAL, source="executor",
+                              signal=signal, rel=rel)
+        except Exception:
+            pass
+
+    def wait_signal(self, name: str, timeout: float = 30.0,
+                    interval: float = 0.5,
+                    stop_event: threading.Event | None = None) -> bool:
+        """等待指定识图信号出现（§5.3 页面判断）。
+
+        信号名来自 scene/ 素材配置的 signal（如 "主界面"）。
+        命中 → 发布 SCENE_SIGNAL + 记录 current_signal，返回 True。
+        未注册信号 / 超时 / 停止 → False。
+
+        用法（任务代码）：
+            if ex.wait_signal("主界面", timeout=5):
+                # 进行下一步
+        """
+        rel = self._rel_by_signal.get(name)
+        if not rel:
+            return False
+        start_time = time.time()
+        while True:
+            if stop_event and stop_event.is_set():
+                return False
+            if time.time() - start_time > timeout:
+                return False
+            if self._recognizer.exists(rel):
+                self._publish_signal(rel)
+                return True
+            self._anti_detect.sleep(interval * 0.5, interval * 0.3, stop_event)
+
     def ensure_scene(self, name: str, timeout: float = 30.0) -> bool:
         """确保场景出现（§5.3）"""
+        # §5.2 素材别名解析（逻辑名 → 素材路径）
+        name = self._resolve(name)
         result = self._recognizer.wait(name, timeout=timeout)
+        if result is not None:
+            self._publish_signal(name)
         return result is not None
 
     def wait_any(
@@ -396,10 +468,12 @@ class Executor:
             if time.time() - start_time > timeout:
                 return None
 
-            # 截一张图，遍历识别
-            result = self._recognizer.wait_any(names, timeout=0, stop_event=stop_event)
-            if result:
-                template_name, match = result
+            # §5.2 素材别名解析（逻辑名 → 素材路径）
+            resolved = self._resolve_list(names)
+            # 截一张图，立即批量识别当前画面（match_any：缺失素材/未命中直接跳过）
+            results = self._recognizer.match_any(resolved)
+            if results:
+                template_name, match = results[0]
                 waiting_time = time.time() - start_time
                 return (template_name, match, waiting_time)
 
@@ -407,9 +481,33 @@ class Executor:
 
     def click_if_exists(self, name: str, threshold: float | None = None) -> bool:
         """存在则点击（§5.3 弹窗拦截用）"""
+        # §5.2 素材别名解析（逻辑名 → 素材路径）
+        name = self._resolve(name)
         if self._recognizer.exists(name, threshold=threshold):
             return self.click_image(name)
         return False
+
+    # ── §5.2 素材别名解析（任务图片配置）────────────────────
+
+    def set_asset_aliases(self, aliases: dict | None) -> None:
+        """设置当前任务的素材别名映射（逻辑名 → 素材路径）。
+
+        由运行控制中心在每次任务执行前注入；任务结束可传 {} 清空。
+        """
+        self._asset_aliases = dict(aliases or {})
+
+    def _resolve(self, name: str) -> str:
+        """解析单个素材名：命中别名映射则返回素材路径，否则原样返回"""
+        if not name or not self._asset_aliases:
+            return name
+        mapped = self._asset_aliases.get(name)
+        return str(mapped) if mapped else name
+
+    def _resolve_list(self, names: list[str]) -> list[str]:
+        """批量解析素材名列表"""
+        if not names or not self._asset_aliases:
+            return list(names)
+        return [self._resolve(n) for n in names]
 
     # ── §5.3 休眠（可打断+沙盒跳过）──────────────────────
 

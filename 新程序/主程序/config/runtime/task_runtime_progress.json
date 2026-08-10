@@ -1,23 +1,23 @@
 {
   "daily_test": {
     "completed": 0,
-    "updated": "2026-08-03T10:18:05.626954"
+    "updated": "2026-08-10T09:44:42.014294"
   },
   "combat_test": {
     "completed": 0,
-    "total": 5,
-    "updated": "2026-08-03T09:39:26.574976"
+    "total": 10,
+    "updated": "2026-08-10T10:22:48.881797"
   },
   "once_test": {
     "completed": 0,
-    "updated": "2026-08-03T16:10:58.690539"
+    "updated": "2026-08-10T10:19:00.600118"
   },
   "manual_trigger_test": {
     "completed": 0,
-    "updated": "2026-08-03T10:52:27.064172"
+    "updated": "2026-08-10T09:53:15.788429"
   },
   "image_trigger_test": {
     "completed": 0,
-    "updated": "2026-08-03T16:11:39.518926"
+    "updated": "2026-08-10T10:19:23.182323"
   }
 }

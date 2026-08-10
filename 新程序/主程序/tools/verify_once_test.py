@@ -98,7 +98,8 @@ def test_task_graph():
     templates = generate(tmp)
     conn = MockConnection(templates)
     rec = Recognizer(asset_dir=tmp, connection=conn, screenshot_ttl=0.05, result_cache_ttl=0.01)
-    ad = AntiDetect()
+    ad = AntiDetect(min_interval=0.001, max_interval=0.002,
+                    action_jitter=False, random_fail_rate=0)
     ex = Executor(recognizer=rec, anti_detect=ad, connection=conn, dry_run=False)
 
     def _on_log(**kw):
@@ -180,7 +181,8 @@ def test_trigger_image():
     templates = generate(tmp)
     conn = MockConnection(templates)
     rec = Recognizer(asset_dir=tmp, connection=conn, screenshot_ttl=0.05, result_cache_ttl=0.01)
-    ad = AntiDetect()
+    ad = AntiDetect(min_interval=0.001, max_interval=0.002,
+                    action_jitter=False, random_fail_rate=0)
     ex = Executor(recognizer=rec, anti_detect=ad, connection=conn, dry_run=False)
     ctx = TaskContext(task_id="once_test", task_name="once_test",
                       executor=ex, recognizer=rec, stop_event=threading.Event())

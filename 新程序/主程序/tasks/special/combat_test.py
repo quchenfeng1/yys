@@ -29,6 +29,7 @@ CHANGE_TEAM = True    # 战前准备：是否更换队伍
 
 import time
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -41,11 +42,26 @@ from tasks.common.soul_configure import SoulConfigure
 from tasks.common.pre_battle_prep import PreBattlePrep
 
 
-def _load_battle_config() -> dict:
-    """从 tasks.yaml 读取本任务的战斗配置（UI「战斗配置」Tab 保存）。
+def _load_battle_config(context: Any = None) -> dict:
+    """读取本任务的战斗配置（UI「战斗配置」Tab 保存）。
 
-    失败/缺失时回退文件内常量（SOUL_SETUP/LOCK_TEAM/CHANGE_TEAM）。
+    优先从 context.task_config 读取（run_controller 注入 scheduler 透传的
+    soul_setup/lock_team/change_team）；缺失时回退文件内常量
+    （SOUL_SETUP/LOCK_TEAM/CHANGE_TEAM）。
     """
+    # ① task_config（架构内透传：UI → tasks.yaml → scheduler → run_controller）
+    if context is not None:
+        cfg = getattr(context, 'task_config', None) or {}
+        soul = cfg.get("soul_setup")
+        lock_team = cfg.get("lock_team")
+        change_team = cfg.get("change_team")
+        if soul or lock_team is not None or change_team is not None:
+            return {
+                "soul_setup": soul or SOUL_SETUP,
+                "lock_team": bool(lock_team) if lock_team is not None else LOCK_TEAM,
+                "change_team": bool(change_team) if change_team is not None else CHANGE_TEAM,
+            }
+    # ② 直接读 tasks.yaml（兼容旧保存；task_config 缺失时兜底）
     try:
         yaml_path = Path(__file__).resolve().parents[2] / "config" / "tasks.yaml"
         if yaml_path.exists():
@@ -87,7 +103,7 @@ class TaskStart(TaskStep):
         tid = _task_id(context)
         cfg = getattr(context, 'task_config', None) or {}
         floor = cfg.get("floor")
-        bc = _load_battle_config()
+        bc = _load_battle_config(context)
         _log(f"▶ [战斗测试] 1/5 任务开始：进入副本 第{floor}层" if floor
              else "▶ [战斗测试] 1/5 任务开始：进入副本（默认层）",
              task=tid, step=self.step_id)
@@ -180,7 +196,7 @@ class TaskEnd(TaskStep):
 
 def build_graph(context):
     from tasks.base.task_graph import EdgeType
-    bc = _load_battle_config()  # 从 tasks.yaml 读取（UI 保存），失败回退文件常量
+    bc = _load_battle_config(context)  # 从 task_config 读取（UI 保存），失败回退文件常量
     soul = bc.get("soul_setup") or {}
     lock_team = bool(bc.get("lock_team", LOCK_TEAM))
     change_team = bool(bc.get("change_team", CHANGE_TEAM))

@@ -5,17 +5,18 @@
 
 ```
 assets/
-  scene/                 识图文件夹：场景感知/位置确认素材（scene_probe 引用 scene/xxx）
-  tasks/                 任务图片（每个游戏任务一个子文件夹）
-    {task_name}/         游戏任务专属图片（代码引用 tasks/{task_name}/xxx）
-    _shared/             通用任务共享图片（代码引用 tasks/_shared/xxx）
+  scene/                 识图素材：脚本识别的背景/场景模板（detect_scene/ensure_scene/scene_probe 引用 scene/xxx）
+  tasks/
+    _shared/             控制素材：需要点击的按钮/控件模板（click_image/click_if_exists 引用 tasks/_shared/xxx）
+    {task_name}/         任务专属图片（可选，单个任务独有，引用 tasks/{task_name}/xxx）
 ```
 
 说明：
 - 02-图像识别模块 仍按相对 assets/ 的路径加载素材（本模块不修改加载机制）
-- 任务代码引用素材时用相对路径（如 `click_image("tasks/my_task/button")`），
+- 任务代码引用素材时用相对路径（如 `click_image("scene/主界面")`、`click_image("tasks/_shared/开始战斗")`），
   find_missing_assets / recognizer 均可直接工作
-- 通用任务共享 `_shared/`；识图文件夹 `scene/` 供场景感知（scene_probe/detect_scene）使用
+- 素材语义：`scene/` 放"识图（背景）"素材，`tasks/_shared/` 放"控制（按钮）"素材
+- 也可通过任务配置 images 映射（{逻辑名: 素材路径}）把逻辑名指向任意素材路径
 """
 from __future__ import annotations
 
@@ -106,18 +107,25 @@ class AssetCatalog:
 
     # ── 列举 ──────────────────────────────────────────────
 
-    @staticmethod
-    def _list_images(folder: Path) -> list[dict]:
-        """列出目录下图片：{name, rel, abs, size}（rel 为相对 assets/ 的引用路径）"""
+    def _list_images(self, folder: Path) -> list[dict]:
+        """列出目录下图片：{name, rel, abs, size}。
+
+        rel = 相对 assets/ 根的引用路径（无前缀，如 scene/主界面.png），
+        与 UI 保存元数据时用的相对路径一致（避免列表读不到标签/信号）。
+        """
         result = []
         if not folder.exists():
             return result
         exts = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
         for f in sorted(folder.iterdir()):
             if f.is_file() and f.suffix.lower() in exts:
+                try:
+                    rel = str(f.relative_to(self._assets)).replace("\\", "/")
+                except ValueError:
+                    rel = str(f.relative_to(folder)).replace("\\", "/")
                 result.append({
                     "name": f.stem,
-                    "rel": str(f.relative_to(folder.parent.parent)).replace("\\", "/"),
+                    "rel": rel,
                     "abs": str(f),
                     "size": f.stat().st_size,
                 })
@@ -141,3 +149,23 @@ class AssetCatalog:
         if not td.exists():
             return []
         return sorted(p.name for p in td.iterdir() if p.is_dir())
+
+    def list_all_images(self) -> list[dict]:
+        """递归列出 assets/ 下全部图片（rel 为相对 assets/ 的引用路径）"""
+        result = []
+        if not self._assets.exists():
+            return result
+        exts = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
+        for f in sorted(self._assets.rglob("*")):
+            if f.is_file() and f.suffix.lower() in exts:
+                try:
+                    rel = str(f.relative_to(self._assets)).replace("\\", "/")
+                except ValueError:
+                    continue
+                result.append({
+                    "name": f.stem,
+                    "rel": rel,
+                    "abs": str(f),
+                    "size": f.stat().st_size,
+                })
+        return result

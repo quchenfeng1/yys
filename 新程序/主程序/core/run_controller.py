@@ -83,6 +83,9 @@ class RunController:
         self._paused = threading.Event()
         self._paused.set()  # 初始非暂停
 
+        # 活动循环次数达上限信号（per-task）：record_cycle 达上限 → set，BattleLoop 立即收尾
+        self._cycle_limit_events: dict[str, threading.Event] = {}
+
         # §2.3 任务队列
         self._task_queue: deque[str] = deque()
         self._queue_lock = threading.Lock()
@@ -128,6 +131,10 @@ class RunController:
                 connection=self._connection,
                 event_bus=self._event_bus,
             )
+
+        # §识图信号映射（scene/ 素材 → 信号名），由启动引导加载 manifest 后注入
+        self._signal_map: dict[str, str] = {}
+        self._rel_by_signal: dict[str, str] = {}
 
         # §3.4 订阅启停控制
         self._bus.subscribe(Events.START_REQUESTED, lambda **kw: self._on_start())
@@ -233,6 +240,9 @@ class RunController:
 
         # Step 3: 恢复运行时进度
         self._restore_runtime_progress()
+        # 跨日检查：周期进度中 cycle_date != 今天 → 重置 completed=0
+        # （一日 100 次执行 20 次中断，次日启动从第 1 次开始）
+        self._reset_cycle_if_new_day()
 
         # Step 4-6: 清空队列 + 设置状态 + 发事件
         with self._queue_lock:
@@ -486,12 +496,30 @@ class RunController:
             if self._executor:
                 self._scan_popups_before_exec()
 
+            # 记录任务开始（供执行历史 / 指标统计）
+            if self._monitor and hasattr(self._monitor, 'record_task_start'):
+                try:
+                    self._monitor.record_task_start(task_name)
+                except Exception:
+                    pass
+
             # §3.7 + §3.8 执行任务（含错误恢复）
             success = self._execute_task_with_recovery(task_name)
 
+            # 区分中断类型：系统停止中断（stop_event 置位且任务未成功）
+            # → mark_done(interrupted=True)：下次执行=当前时间（立即到期重跑），不算失败
+            # 异常失败（识别错误等）→ 走冷却推迟 + 队列标注
+            interrupted = (not success) and self._stop_event.is_set()
+
             # mark_done
             if self._scheduler and hasattr(self._scheduler, 'mark_done'):
-                self._scheduler.mark_done(task_name, success)
+                self._scheduler.mark_done(task_name, success, interrupted=interrupted)
+            # 记录任务完成（追加 execution_history → UI「执行历史」面板）
+            if self._monitor and hasattr(self._monitor, 'record_task_done'):
+                try:
+                    self._monitor.record_task_done(task_name, success)
+                except Exception:
+                    pass
             if self._monitor and hasattr(self._monitor, 'info'):
                 self._monitor.info(f"任务执行收尾: {task_name} success={success} → 05.mark_done 已调用",
                                    module="09-运行控制中心")
@@ -660,6 +688,12 @@ class RunController:
                         "team_id": getattr(cfg, 'team_id', None),
                         "floor": getattr(cfg, 'floor', None),
                         "execution_mode": getattr(cfg, 'execution_mode', 'daily'),
+                        "teaming": getattr(cfg, 'teaming', None),
+                        "images": getattr(cfg, 'images', None),
+                        "soul_setup": getattr(cfg, 'soul_setup', None),
+                        "lock_team": bool(getattr(cfg, 'lock_team', False)),
+                        "change_team": bool(getattr(cfg, 'change_team', False)),
+                        "stamina_required": getattr(cfg, 'stamina_required', None),
                         "repeat": None,
                         "loop_count": None,
                     }
@@ -674,6 +708,9 @@ class RunController:
 
             # 构造 TaskContext（§5.4）
             from tasks.base.task_context import TaskContext
+            # 活动循环次数达上限信号（per-task）：BattleLoop 每轮循环前检查，达上限立即收尾
+            cycle_evt = self._cycle_limit_events.setdefault(task_name, threading.Event())
+            cycle_evt.clear()
             context = TaskContext(
                 task_id=task_name,
                 task_name=task_name,
@@ -681,7 +718,9 @@ class RunController:
                 executor=self._executor,
                 recognizer=self._recognizer,
                 stop_event=self._stop_event,
+                cycle_limit_event=cycle_evt,
                 timeout=300.0,
+                account_manager=self._account_mgr,
                 state=self._state_mgr.get_state("task_runtime_progress", {}) if self._state_mgr else {},
                 # 说明书 04 §BattleLoop：每场战斗结束的进度持久化回调
                 progress_saver=self._on_task_progress,
@@ -694,6 +733,12 @@ class RunController:
             if is_step_entry:
                 self._bus.publish(Events.TASK_STARTED, source="run_controller",
                                  task_id=task_name, task_name=task_name)
+
+            # §5.2 任务图片映射（逻辑名→素材路径）注入 Executor，供任务代码识别解析
+            try:
+                self._executor.set_asset_aliases(task_config.get("images") or {})
+            except Exception:
+                pass
 
             result = task.execute(context)
             ok = bool(getattr(result, 'success', False) or getattr(result, 'status', None) == 'success')
@@ -862,12 +907,15 @@ class RunController:
         return data
 
     def _update_task_progress(self, task_name: str, success: bool) -> None:
-        """本轮任务结束 → 重置场次进度（下一轮从 0 开始）
+        """本轮任务结束 → 保留周期进度（断点续跑，不清 0）。
 
-        场次进度由 BattleLoop 每场战斗后维护（_on_task_progress），
-        这里只在任务整轮完成后清空，使下一轮重新从 0 开始。
+        周期进度（task_runtime_progress.completed）由 BattleLoop 逐场累计
+        （_on_task_progress 每场持久化）。任务完成后**不**清 0：
+        - 同周期内再次执行 → 任务从 completed 续跑（执行 20/100 中断后从 20 继续）
+        - 跨日 → _reset_cycle_if_new_day 在启动时重置为 0（从第 1 次开始）
+        - 手动改配置 → reset_task_cycle 重置为 0（从第 1 次开始）
         """
-        self._reset_task_progress(task_name)
+        pass
 
     def _on_task_progress(self, task_id: str, completed: int, total: int) -> None:
         """
@@ -875,6 +923,10 @@ class RunController:
 
         更新 task_runtime_progress 并立即写盘——异常关闭时
         最多丢失最近 1 场进度（断点续跑保障）。
+        cycle_date 记录当前周期日期（跨日重置依据）。
+
+        同时向调度器上报「活动循环次数」：每轮循环体循环成功 +1，
+        累计达到活动循环次数上限后任务进入失效区。
         """
         if not self._state_mgr:
             return
@@ -883,10 +935,62 @@ class RunController:
             progress[task_id] = {
                 "completed": int(completed),
                 "total": int(total),
+                "cycle_date": datetime.now().strftime("%Y-%m-%d"),
                 "updated": datetime.now().isoformat(),
             }
             self._state_mgr.set_state("task_runtime_progress", progress)
             self._save_runtime_progress()
+        except Exception:
+            pass
+        # 活动循环次数上报：每轮循环体循环成功 +1（调度器累计，达上限 → 任务失效）
+        if self._scheduler and hasattr(self._scheduler, 'record_cycle'):
+            try:
+                reached = self._scheduler.record_cycle(task_id, 1)
+                if reached:
+                    # 达上限 → 通知正在执行的循环体立即中断收尾
+                    evt = self._cycle_limit_events.get(task_id)
+                    if evt is not None:
+                        evt.set()
+            except Exception:
+                pass
+
+    def reset_task_cycle(self, task_name: str) -> None:
+        """重置指定任务的周期进度（手动更改配置后调用，下次从第 1 次开始）。"""
+        if not self._state_mgr:
+            return
+        try:
+            progress = self._state_mgr.get_state("task_runtime_progress", {})
+            progress[task_name] = {
+                "completed": 0,
+                "total": 0,
+                "cycle_date": datetime.now().strftime("%Y-%m-%d"),
+                "updated": datetime.now().isoformat(),
+            }
+            self._state_mgr.set_state("task_runtime_progress", progress)
+            self._save_runtime_progress()
+        except Exception:
+            pass
+
+    def _reset_cycle_if_new_day(self) -> None:
+        """跨日检查：周期进度中 cycle_date != 今天 → 重置 completed=0（从第 1 次开始）。
+
+        由 _start_run 每次启动时调用（用户描述：执行 20 次中断，下次启动已是
+        第二天 → 从第 1 次执行）。
+        """
+        if not self._state_mgr:
+            return
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            progress = self._state_mgr.get_state("task_runtime_progress", {})
+            changed = False
+            for entry in list(progress.values()):
+                if isinstance(entry, dict) and entry.get("cycle_date") != today:
+                    entry["completed"] = 0
+                    entry["cycle_date"] = today
+                    changed = True
+            if changed:
+                self._state_mgr.set_state("task_runtime_progress", progress)
+                self._save_runtime_progress()
         except Exception:
             pass
 
@@ -943,7 +1047,14 @@ class RunController:
                         tmpls = cfg.repeat.trigger_templates or []
                         # 只监控配置了触发模板的任务（无模板=仅手动触发，不启动监控）
                         if tmpls:
-                            trigger_tasks.append((cfg.name, list(tmpls)))
+                            # 支持信号名触发：trigger_templates 填信号名 → 解析为素材路径
+                            resolved = []
+                            for t in tmpls:
+                                if t in self._rel_by_signal:
+                                    resolved.append(self._rel_by_signal[t])
+                                else:
+                                    resolved.append(t)
+                            trigger_tasks.append((cfg.name, resolved))
             except Exception:
                 pass
         self._trigger_watcher.start(trigger_tasks)
@@ -953,9 +1064,25 @@ class RunController:
         if self._trigger_watcher:
             self._trigger_watcher.stop()
 
+    def set_signal_map(self, signal_map: dict | None) -> None:
+        """注入识图信号映射 {素材相对路径: 信号名}（启动引导从 assets manifest 加载）。
+
+        用途：
+        ① 转发给 Executor（detect_scene/ensure_scene/wait_signal 发布 SCENE_SIGNAL）；
+        ② 触发式任务的 trigger_templates 可填**信号名**，收集时解析为素材路径。
+        """
+        self._signal_map = {str(k): str(v) for k, v in (signal_map or {}).items() if v}
+        self._rel_by_signal = {v: k for k, v in self._signal_map.items()}
+        try:
+            self._executor.set_signal_map(self._signal_map)
+        except Exception:
+            pass
+
     def _on_start(self) -> None:
         """接收 start_requested 事件（§5.3）"""
-        if not self.is_running:
+        # 运行中或暂停中均不重启：暂停时 is_running=False，若不拦截会重新
+        # execute() 创建重复线程并绕过暂停语义
+        if not self.is_running and not self.is_paused:
             self.execute()
 
     def _on_stop(self) -> None:

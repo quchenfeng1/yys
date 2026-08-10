@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -452,19 +452,122 @@ class AccountManager:
             return True
         return False
 
-    # ── 兼容旧接口 ─────────────────────────────────────────
+    # ── 账号增删改（§2.2 + §5.3 持久化）────────────────────
+
+    def _to_raw_list(self) -> list[dict[str, Any]]:
+        """把内存账号转 accounts.yaml 原始 dict 列表"""
+        out: list[dict[str, Any]] = []
+        for info in self._accounts.values():
+            out.append({
+                "account_id": info.account_id,
+                "name": info.name,
+                "role": info.role,
+                "enabled": bool(info.enabled),
+                "region": info.region,
+                "device_id": info.device_id,
+                "server": info.server or info.region,
+                "task_scope": list(info.task_scope or []),
+                "team_group": info.team_group,
+                "teaming_enabled": bool(info.teaming_enabled),
+            })
+        return out
+
+    def _persist_accounts(self) -> bool:
+        """将当前账号列表写回 accounts.yaml（ConfigManager.update_accounts，写盘优先）"""
+        mgr = self._config_mgr
+        if not mgr or not hasattr(mgr, 'update_accounts'):
+            return False
+        try:
+            mgr.update_accounts(self._to_raw_list())
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _build_account_info(entry: dict[str, Any]) -> AccountInfo | None:
+        """从 dict 构造 AccountInfo（补默认值）；非法返回 None"""
+        try:
+            name = str(entry.get("name") or entry.get("account_id") or "").strip()
+            aid = str(entry.get("account_id") or entry.get("id") or name).strip()
+            if not aid:
+                return None
+            role = str(entry.get("role") or "sub").strip()
+            return AccountInfo(
+                account_id=aid,
+                name=name or aid,
+                role=role,
+                enabled=bool(entry.get("enabled", True)),
+                region=str(entry.get("region") or "cn"),
+                device_id=str(entry.get("device_id") or ""),
+                server=str(entry.get("server") or entry.get("region") or "cn"),
+                task_scope=list(entry.get("task_scope") or (
+                    ["daily", "permanent", "event", "special"] if role == "main"
+                    else ["permanent"])),
+                team_group=str(entry.get("team_group") or ""),
+                teaming_enabled=bool(entry.get("teaming_enabled", role == "sub")),
+            )
+        except Exception:
+            return None
 
     def add_account(self, entry: Any) -> bool:
-        # 兼容旧版
-        return False
+        """
+        添加账号并持久化（§2.2 + §5.3）。
 
-    def remove_account(self, name: str) -> bool:
-        return False
+        entry: {account_id, name, role, device_id, region, enabled, ...}
+        返回 True=成功 / False=失败（非法或已存在）。
+        """
+        raw = entry if isinstance(entry, dict) else (getattr(entry, '__dict__', {}) or {})
+        info = self._build_account_info(dict(raw))
+        if info is None:
+            return False
+        with self._accounts_lock:
+            if info.account_id in self._accounts:
+                return False
+            self._accounts[info.account_id] = info
+            if self._current_id is None and info.role == "main":
+                self._current_id = info.account_id
+        if not self._persist_accounts():
+            return False
+        try:
+            self._bus.publish(Events.ACCOUNT_LOGIN, source="account_manager",
+                              account_id=info.account_id, role=info.role, added=True)
+        except Exception:
+            pass
+        return True
 
-    def update_account(self, name: str, **updates: Any) -> bool:
-        return False
+    def remove_account(self, account_id: str) -> bool:
+        """删除账号并持久化（§2.2）"""
+        with self._accounts_lock:
+            if account_id not in self._accounts:
+                return False
+            del self._accounts[account_id]
+            if self._current_id == account_id:
+                self._current_id = None
+                if self._accounts:
+                    main = self.main_account
+                    self._current_id = main.account_id if main else list(self._accounts.keys())[0]
+        if not self._persist_accounts():
+            return False
+        try:
+            self._bus.publish(Events.ACCOUNT_LOGOUT, source="account_manager",
+                              account_id=account_id, removed=True)
+        except Exception:
+            pass
+        return True
 
-    def get_current_account(self) -> AccountEntry | None:
+    def update_account(self, account_id: str, **updates: Any) -> bool:
+        """更新账号字段并持久化（§2.2，account_id 不可改）"""
+        with self._accounts_lock:
+            info = self._accounts.get(account_id)
+            if info is None:
+                return False
+            allowed = {f.name for f in fields(AccountInfo)}
+            for k, v in updates.items():
+                if k in allowed and k != "account_id":
+                    setattr(info, k, v)
+        return self._persist_accounts()
+
+    def get_current_account(self) -> AccountInfo | None:
         """获取当前账号"""
         if not self._current:
             return None

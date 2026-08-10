@@ -1,2 +1,19 @@
-main_accounts: []
-sub_accounts: []
+# 账号配置（§2.2）
+# account_id: 账号唯一标识（主号建议 main，小号 sub1/sub2...）
+# role: main=主号 / sub=小号
+# device_id: 绑定的模拟器设备ID（如 127.0.0.1:16384），留空表示未绑定
+accounts:
+  - account_id: main
+    name: 大号
+    role: main
+    enabled: true
+    region: cn
+    device_id: ""
+    remark: ""
+  - account_id: sub1
+    name: 小号一
+    role: sub
+    enabled: true
+    region: cn
+    device_id: ""
+    remark: ""

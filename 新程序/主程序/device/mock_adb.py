@@ -46,6 +46,7 @@ class MockADBClient:
         screenshot_timeout: float = 15.0,
         input_timeout: float = 10.0,
         assets_dir: str | Path | None = None,
+        assets_prefix: str | None = None,
     ):
         self._adb_path = adb_path
         self._serial: str | None = serial or None
@@ -53,6 +54,10 @@ class MockADBClient:
         self._screenshot_timeout = screenshot_timeout
         self._input_timeout = input_timeout
         self._assets_dir = Path(assets_dir) if assets_dir else None
+        # 设备专属素材前缀：只加载该前缀下的素材（模拟每个模拟器只显示自己界面）。
+        # 键仍为完整相对路径（如 "main/btn_xxx"），与识别器素材键一致。
+        # 默认 None = 加载全部素材（向后兼容）。
+        self._assets_prefix = assets_prefix
 
         # 合成截图相关
         self._templates: dict[str, np.ndarray] = {}
@@ -99,7 +104,11 @@ class MockADBClient:
                 if img is None:
                     continue
                 rel = p.relative_to(self._assets_dir).with_suffix("")
-                self._templates[str(rel).replace("\\", "/")] = img
+                key = str(rel).replace("\\", "/")
+                # 设备专属前缀过滤：只保留该前缀下的素材（模拟每个模拟器只显示自己界面）
+                if self._assets_prefix and not key.startswith(self._assets_prefix + "/"):
+                    continue
+                self._templates[key] = img
             except Exception:
                 continue
 

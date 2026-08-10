@@ -5,7 +5,7 @@
 验证「按任务设计指导书写法」的任务能否完整跑通：
   1. TaskStep 无参构造（继承类属性 name / is_generic / timeout）
   2. Registry 注册 TaskStep 入口类（声明 display_name），特化步骤不误注册
-  3. Scheduler execution_mode 多时段推进（per_slot 每时段各一次 / daily 一天一次 / max_daily）
+  3. Scheduler 多时段推进（per_slot 每时段各一次 / 周期触发次数 max_daily 满→永久完成）
   4. run_controller._execute_task_once 注入 context.task_config（loop_count/floor/team_id/execution_mode）
 
 运行：
@@ -152,31 +152,29 @@ def verify_scheduler_rounds() -> None:
           nrt1 is not None and nrt1 > now and nrt1.strftime("%H:%M") in starts,
           f"实际 {nrt1}")
 
-    # 第 2 次成功 → max_daily=2 满 → 今日 completed + next_run=次日首个时段起点
+    # 第 2 次成功 → 周期触发次数(max_daily=2)满 → 永久完成（失效区，不按天恢复）
     sched.mark_done("slot_task", success=True)
-    nrt2 = sched._next_run["slot_task"]
-    check("per_slot 满 max_daily → 次日首个时段起点",
-          nrt2 is not None and nrt2.date() > now.date()
-          and nrt2.strftime("%H:%M") in starts, f"实际 {nrt2}")
-    check("满 max_daily → 今日 completed",
-          sched.task_status.get("slot_task") == ScheduleStatus.COMPLETED,
-          f"实际 {sched.task_status.get('slot_task')}")
+    check("per_slot 满 max_daily → 永久完成(失效区)",
+          "slot_task" not in sched._next_run
+          and sched.task_status.get("slot_task") == ScheduleStatus.COMPLETED,
+          f"实际 next={sched._next_run.get('slot_task')} "
+          f"status={sched.task_status.get('slot_task')}")
 
-    # daily 模式：一天只执行一次 → 直接次日首个时段起点
+    # execution_mode 已移除：多时段固定"每时段各执行一次"（per_slot 行为）
+    # 无 execution_mode 字段的多时段任务 → 下一时段起点（不再有"daily 次日"分支）
     cfg2 = TaskConfig(
-        name="slot_daily",
+        name="slot_no_mode",
         repeat=RepeatConfig(type="daily", value=1),
-        execution_mode="daily",
         time_slots=slots,
     )
-    sched._tasks["slot_daily"] = cfg2
-    sched._next_run["slot_daily"] = now - timedelta(minutes=5)
-    sched._today_count["slot_daily"] = 0
-    sched.mark_done("slot_daily", success=True)
-    nrt3 = sched._next_run["slot_daily"]
-    check("daily 模式 → 次日首个时段起点（一天一次）",
-          nrt3 is not None and nrt3.date() > now.date()
-          and nrt3.strftime("%H:%M") in starts, f"实际 {nrt3}")
+    sched._tasks["slot_no_mode"] = cfg2
+    sched._next_run["slot_no_mode"] = now - timedelta(minutes=5)
+    sched._today_count["slot_no_mode"] = 0
+    sched.mark_done("slot_no_mode", success=True)
+    nrt3 = sched._next_run["slot_no_mode"]
+    check("多时段无执行模式 → 下一时段起点（每时段一次）",
+          nrt3 is not None and nrt3 > now and nrt3.strftime("%H:%M") in starts,
+          f"实际 {nrt3}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -235,7 +233,7 @@ def verify_task_config_injection() -> None:
 
 
 def verify_total_count_and_time_window() -> None:
-    print("\n[5/5] 累计总次数 + on_enter 启动任务")
+    print("\n[5/5] 活动循环次数 + on_enter 启动任务")
     from core.scheduler import Scheduler, TaskConfig, RepeatConfig, ScheduleStatus
     from core.task_state import TaskStateStore
 
@@ -245,18 +243,21 @@ def verify_total_count_and_time_window() -> None:
         tz = timezone(timedelta(hours=8))
         past = datetime.now(tz) - timedelta(minutes=5)
 
-        # ── total_count 累计上限（如 100 次） ──
+        # ── 活动循环次数上限（total_count，循环体循环次数，record_cycle 每轮 +1） ──
         sched._tasks["tt"] = TaskConfig(name="tt", repeat=RepeatConfig(type="daily", value=1), total_count=2)
         sched._next_run["tt"] = past
         sched._today_count["tt"] = 0
-        sched.mark_done("tt", success=True)
-        check("累计1次后未达上限(仍调度)",
+        sched.record_cycle("tt", 1)
+        check("循环1次后未达上限(仍调度)",
               sched._total_count.get("tt") == 1 and sched._next_run.get("tt") is not None)
-        sched.mark_done("tt", success=True)
-        check("累计2次后永久完成",
-              sched._total_count.get("tt") == 2
+        done = sched.record_cycle("tt", 1)
+        check("循环2次后永久完成(record_cycle 达上限返回 True)",
+              done is True
+              and sched._total_count.get("tt") == 2
               and sched.task_status.get("tt") == ScheduleStatus.COMPLETED
-              and "tt" not in sched._next_run)
+              and "tt" not in sched._next_run,
+              f"done={done} total={sched._total_count.get('tt')} "
+              f"status={sched.task_status.get('tt')}")
         schedule = sched.build_schedule()
         check("达标任务不进入日程", "tt" not in [t.name for t in schedule])
 

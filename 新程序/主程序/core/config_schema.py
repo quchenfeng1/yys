@@ -104,11 +104,18 @@ class GlobalConfig:
 
 @dataclass
 class AccountEntry:
-    """单个账号"""
-    name: str = ""
+    """单个账号（§2.2 账号配置）"""
+    account_id: str = ""             # 账号标识（"main"/"sub1"/"sub2"）
+    name: str = ""                   # 显示名
+    role: str = "sub"                # 角色（"main" / "sub"）
     enabled: bool = True
-    region: str = "cn"
+    region: str = "cn"               # 区服
+    device_id: str = ""              # 绑定的模拟器设备 ID
+    server: str = ""                 # 区服（同 region，兼容）
     remark: str = ""
+    task_scope: list[str] = field(default_factory=lambda: ["daily", "permanent", "event", "special"])
+    team_group: str = ""             # 组队分组标识
+    teaming_enabled: bool = True     # 是否允许作为组队小号被调用
     cookies: dict[str, str] = field(default_factory=dict)
 
 
@@ -149,9 +156,9 @@ class TaskEntry:
     params: dict[str, Any] = field(default_factory=dict)
 
     # ── 设计书调度字段（§5.1，scheduler 读取） ──────────────
-    repeat: dict | None = None          # {type, value, weekday, window, expire_at, loop_count, monthly_day}（含 on_enter 启动类型）
+    repeat: dict | None = None          # {type, value, weekday(s), window(日历兼容), loop_count, monthly_day, trigger_templates}（含 on_enter 启动类型；expire_at 兼容旧配置）
     execution_mode: str = "daily"       # 执行模式：daily=按天执行一次 / per_slot=每时间段各执行一次
-    max_daily: int | None = None        # 每日最大执行次数（可选）
+    max_daily: int | None = None        # 周期触发次数：活动周期内任务被触发的次数上限（达到→失效，None=不限）
     max_fail_streak: int = 10           # 连续失败熔断阈值
     active_range: list[str] | None = None  # ["2026-07-20", "2026-08-20"]
     time_start: str | None = None       # "08:00"（单时段；与 time_slots 互斥）
@@ -159,8 +166,15 @@ class TaskEntry:
     time_slots: list[list[str]] | None = None  # 多时段 [["10:00","12:00"],["12:00","14:00"]]，2+ 时段时优先于 time_start/time_end
     team_id: str | None = None          # 阵容 ID
     floor: int | None = None            # 副本层数
-    total_count: int | None = None      # 累计执行次数上限（活动期累计）
-    loop_count: int | None = None       # 每轮循环次数（BattleLoop 内战斗次数）
+    total_count: int | None = None      # 活动循环次数：循环体循环次数上限（每轮循环成功 +1，达到→失效，None=不限）
+    loop_count: int | None = None       # 每轮循环次数（单人=打几场；组队=打几轮）
+    images: dict | None = None          # 任务图片映射 {逻辑名: 素材路径}（§5.2 任务图片配置）
+    # ── 战斗配置（UI「战斗配置」Tab 保存，scheduler→task_config 透传）──
+    soul_setup: dict | None = None      # 御魂套装 {group, team, position:[分组序号,队伍序号]}
+    lock_team: bool = False             # 战前准备：是否锁定队伍（选是则无法更换）
+    change_team: bool = False           # 战前准备：是否更换队伍
+    stamina_required: int | None = None # 体力门槛（uses_stamina=True 时，0=不检查）
+    teaming: dict | None = None         # 组队配置 {sub_ids:[...]}（主号带队，轮数复用 loop_count）
 
 
 @dataclass
@@ -235,9 +249,10 @@ def validate_accounts_config(data: dict[str, Any]) -> AccountsConfig:
     if not isinstance(accounts, list):
         errors.append("accounts 必须为列表")
     else:
-        names = [a.get("name", "") for a in accounts]
-        if len(names) != len(set(names)):
-            errors.append("账号名存在重复")
+        # 兼容：account_id 唯一优先，缺失时回退 name 唯一
+        ids = [a.get("account_id") or a.get("name", "") for a in accounts if isinstance(a, dict)]
+        if len(ids) != len(set(ids)):
+            errors.append("账号 ID 存在重复")
 
     if errors:
         raise ConfigValidationError("; ".join(errors))

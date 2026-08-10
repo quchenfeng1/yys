@@ -11,8 +11,8 @@ RepeatRule 重复规则（dataclass + helper）。
 - monthly_start: 每月指定日（默认 1 号）
 - interval_days: 每 N 天
 - interval_hours: 每 N 小时
-- expire_at: 执行到指定日期后不再调度
-- special: 特殊规则（同 daily，受 window.date 限制）
+- expire_at: 已弃用（UI 已移除，代码保留兼容旧配置：每 1 小时执行到指定日期 23:59:59 截止）
+- special: 已弃用（等同 daily，日历导入兼容；window 不参与调度，旧配置回退 daily）
 - on_enter: 每次运行启动后执行一次（load_state 时重置 next_run=now，执行后本轮完成）
 - trigger: 特殊条件触发（无时间推进，无初始 next_run；由外部触发——TriggerWatcher 识图命中/手动 update_next_run——置为到期；执行后本轮完成）
 

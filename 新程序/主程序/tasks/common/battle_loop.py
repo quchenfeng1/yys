@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from tasks.base.task_step import TaskStep, StepResult, StepStatus
 
@@ -48,6 +49,13 @@ class BattleLoop(TaskStep):
         while remaining < 0 or remaining > 0:
             if self.check_interrupt(context):
                 return StepResult(status=StepStatus.SKIP, message="被中断")
+            # 活动循环次数达上限 → 任务目标已达成，立即中断收尾（返回成功）
+            if (getattr(context, 'cycle_limit_event', None)
+                    and context.cycle_limit_event.is_set()):
+                return StepResult(
+                    status=StepStatus.SUCCESS,
+                    message=f"活动循环次数达上限，共完成 {completed} 场",
+                )
 
             # 等待当前场次结束（识别结算界面）
             if wait_time > 0:

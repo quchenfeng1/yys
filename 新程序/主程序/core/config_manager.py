@@ -750,6 +750,29 @@ class ConfigManager:
             self._invalidate_index_prefix("tasks")
             self._bus.publish(Events.CONFIG_CHANGED, source="tasks", task_name=name)
 
+    def update_accounts(self, accounts: list[dict[str, Any]]) -> None:
+        """
+        整体替换 accounts.yaml 的 accounts 列表并持久化（§2.2 + §5.3）。
+
+        accounts: [{account_id, name, role, enabled, region, device_id, ...}]
+        写盘优先：先原子写盘，失败不修改缓存；成功后重建 accounts_config 缓存。
+        """
+        import copy
+        with self._lock:
+            accounts_section = copy.deepcopy(self._raw_accounts or {})
+            accounts_section["accounts"] = accounts
+
+            # 写盘优先（§3.3）
+            self._atomic_save("accounts", accounts_section)
+            # 写盘成功 → 更新缓存
+            self._raw_accounts = accounts_section
+            # 重建 accounts_config 缓存
+            try:
+                self._accounts = validate_accounts_config(accounts_section)
+            except Exception:
+                pass
+            self._bus.publish(Events.CONFIG_CHANGED, source="accounts")
+
     def get_coords(self, scene: str) -> dict[str, Any]:
         """读取场景坐标（§5.3）"""
         with self._lock:

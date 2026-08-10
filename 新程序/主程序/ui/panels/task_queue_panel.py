@@ -246,6 +246,15 @@ class TaskQueuePanel(QWidget):
                         on_action=lambda n=name: self.manual_trigger_requested.emit(n),
                     )
                     continue
+                elif status in ("已达上限",):
+                    # 触发已达周期最大次数 → 触发按钮失效（不可再触发）
+                    color = "#e53935"
+                    badge = "已达上限"
+                    self._add_card(
+                        self.invalid_list, title=f"🚫 {name}", sub=detail or "",
+                        badge_text=badge, badge_color=color,
+                    )
+                    continue
                 elif status in ("已跳过",):
                     color = "#e53935"
                 self._add_card(self.invalid_list, title=name, sub=detail or "",
@@ -286,18 +295,21 @@ class TaskQueuePanel(QWidget):
             if isinstance(item, dict):
                 name = item.get("name", "")
                 nrt = item.get("next_run", "")
-                if not nrt:
-                    # 触发式任务：待触发 + 手动触发按钮
+                reason = item.get("reason", "")
+                # 触发式任务统一在「已失效」区显示 ⚡触发（scheduler 归入）；
+                # 未开始区仅展示普通等待任务，不再放触发按钮（避免普通任务误触发）
+                if reason:
+                    # 异常推迟/熔断标注（识别错误等导致的冷却重试）
+                    sub = f"⏱ {nrt} · {reason}" if nrt else reason
                     self._add_card(
-                        self.upcoming_list, title=f"⚡ {name}", sub="等待外部触发",
-                        badge_text="待触发", badge_color="#1e88e5",
-                        action_text="⚡触发",
-                        on_action=lambda n=name: self.manual_trigger_requested.emit(n),
+                        self.upcoming_list, title=f"⚠ {name}", sub=sub,
+                        badge_text="异常推迟", badge_color="#e53935",
                     )
                 else:
                     self._add_card(
-                        self.upcoming_list, title=name, sub=f"⏱ {nrt}",
-                        badge_text="未开始", badge_color="#1e88e5",
+                        self.upcoming_list, title=name,
+                        sub=f"⏱ {nrt}" if nrt else "待调度",
+                        badge_text="未开始" if nrt else "待调度", badge_color="#1e88e5",
                     )
             else:
                 self._add_card(self.upcoming_list, title=str(item))

@@ -110,6 +110,16 @@ class TaskGraph:
         self._start_time = time.time()
         self._fail_streak = 0
         self.step_result = None
+
+        # 熔断阈值：优先 task_config.max_fail_streak（UI「失败容忍」配置），
+        # 未配置时用构造默认（5）。此前该值从不注入，UI 配置不生效。
+        try:
+            _tc = getattr(context, 'task_config', None) or {}
+            _mfs = _tc.get("max_fail_streak")
+            if _mfs is not None:
+                self._max_fail_streak = int(_mfs)
+        except (TypeError, ValueError):
+            pass
         results: list[StepResult] = []
         total = len(self._nodes)  # 提前定义，防止 while 不执行时 NameError
 

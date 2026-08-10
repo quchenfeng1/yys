@@ -319,7 +319,9 @@ class Monitor:
             return
 
         try:
-            history = self._state_mgr.get_state("execution_history", [])
+            # 复制一份再追加：get_state 返回的是 store 内同一个可变对象，
+            # 原地 append 会触发 StateManager 同引用检测（value is old）→ 事件被拦截
+            history = list(self._state_mgr.get_state("execution_history", []) or [])
             if not isinstance(history, list):
                 history = []
             history.append({

@@ -27,6 +27,8 @@ class TaskContext:
     executor: Any = None  # §5.2 14-执行器模块（含安全注入）
     recognizer: Any = None  # §5.2 02-图像识别模块
     stop_event: threading.Event | None = None  # §5.2 停止信号
+    cycle_limit_event: threading.Event | None = None  # 活动循环次数达上限信号（per-task：达上限立即中断收尾）
+    account_manager: Any = None  # §3.10 15-账号管理模块（组队协调：切换小号/查询组队伙伴）
     # 说明书 04 §BattleLoop：每场战斗结束的进度持久化回调
     # 签名 on_progress(task_id, completed, total)，由 09-运行控制中心 注入
     progress_saver: Any = None
@@ -43,6 +45,25 @@ class TaskContext:
     def set(self, key: str, value: Any) -> None:
         """设置上下文数据"""
         self.state[key] = value
+
+    def resolve_asset(self, name: str) -> str:
+        """素材别名解析（逻辑名 → 素材路径，§5.2 任务图片配置）。
+
+        任务代码引用逻辑名（如 click_image(逻辑名)），
+        若任务配置 images 中配置了 {逻辑名: 素材路径}，返回素材路径；
+        否则原样返回（逻辑名即素材名，向后兼容硬编码引用）。
+        """
+        if not name:
+            return name
+        try:
+            images = (self.task_config or {}).get("images") or {}
+            if isinstance(images, dict) and name in images:
+                mapped = images[name]
+                if mapped:
+                    return str(mapped)
+        except Exception:
+            pass
+        return name
 
     def get(self, key: str, default: Any = None) -> Any:
         """获取上下文数据"""

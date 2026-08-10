@@ -91,7 +91,8 @@ def main():
     conn = MockConnection(templates)
 
     rec = Recognizer(asset_dir=tmp, connection=conn, screenshot_ttl=0.05, result_cache_ttl=0.01)
-    ad = AntiDetect()
+    ad = AntiDetect(min_interval=0.001, max_interval=0.002,
+                    action_jitter=False, random_fail_rate=0)
     ex = Executor(recognizer=rec, anti_detect=ad, connection=conn, dry_run=False)
 
     def _on_log(**kw):

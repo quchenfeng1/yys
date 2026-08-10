@@ -11,8 +11,25 @@ from PyQt5.QtWidgets import (
     QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
-# 日志级别顺序（供筛选）
+# 日志级别顺序（供筛选；阈值语义：选 X 显示 X 及更严重级别）
+# 与 core/logger.py 级别体系一致：TRACE < DEBUG < INFO < SUCCESS < WARNING < ERROR < CRITICAL
 _LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+_LEVEL_INDEX = {
+    "TRACE": 0,
+    "DEBUG": 1,
+    "INFO": 2,
+    "SUCCESS": 3,
+    "WARNING": 4,
+    "ERROR": 5,
+    "CRITICAL": 6,
+}
+
+
+def _meets_threshold(level: str, sel: str) -> bool:
+    """日志级别 level 是否满足筛选阈值 sel（>= 即满足；未知级别按 DEBUG 最低处理）"""
+    if not sel:
+        return True  # 全部
+    return _LEVEL_INDEX.get(str(level), 0) >= _LEVEL_INDEX.get(sel, 0)
 
 
 class LogPanel(QWidget):
@@ -62,6 +79,7 @@ class LogPanel(QWidget):
 
         # 原始日志缓存（(level, text)，供筛选/导出）
         self._log_cache: list[tuple[str, str]] = []
+        self._auto_scroll = True  # 设置面板「自动滚动」开关（默认开）
 
     # ── 日志追加 ─────────────────────────────────────────
 
@@ -81,15 +99,16 @@ class LogPanel(QWidget):
         level = kw.get("level", "INFO")
         # 缓存原始记录（供筛选/导出）
         self._log_cache.append((str(level), str(message)))
-        # 当前筛选级别：不匹配则不显示
+        # 当前筛选级别：阈值语义（选 INFO 显示 INFO/WARNING/ERROR，不显示 DEBUG）
         sel = self.level_combo.currentData() if hasattr(self, 'level_combo') else ""
-        if sel and level != sel:
+        if not _meets_threshold(level, sel):
             return
         formatted = f"[{level}] {message}" if level else message
         self.log_view.appendPlainText(formatted)
-        # 自动滚动到底部
-        scrollbar = self.log_view.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # 自动滚动到底部（设置面板「自动滚动」可关）
+        if getattr(self, '_auto_scroll', True):
+            scrollbar = self.log_view.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
 
     def append_terminal(self, text: str) -> None:
         """追加终端输出"""
@@ -98,15 +117,33 @@ class LogPanel(QWidget):
     # ── §3.3 级别筛选 / 清除 / 导出 ───────────────────────
 
     def _apply_filter(self) -> None:
-        """按当前筛选级别重建日志视图"""
+        """按当前筛选级别重建日志视图（阈值语义）"""
         sel = self.level_combo.currentData() if hasattr(self, 'level_combo') else ""
         self.log_view.clear()
         for level, text in self._log_cache:
-            if sel and level != sel:
+            if not _meets_threshold(level, sel):
                 continue
             self.log_view.appendPlainText(f"[{level}] {text}" if level else text)
-        scrollbar = self.log_view.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        if getattr(self, '_auto_scroll', True):
+            scrollbar = self.log_view.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    # ── 设置面板联动（日志级别 / 自动滚动 / 字体大小） ────────
+
+    def set_level_filter(self, level: str) -> None:
+        """设置筛选级别（设置面板「日志级别」；空/未知 = 全部显示）"""
+        idx = self.level_combo.findData(level)
+        self.level_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def set_auto_scroll(self, enabled: bool) -> None:
+        """设置是否自动滚动到底部（设置面板「自动滚动」）"""
+        self._auto_scroll = bool(enabled)
+
+    def set_log_font_size(self, size: int) -> None:
+        """设置日志/终端字体大小（设置面板「字体大小」）"""
+        css = f"font-size: {int(size)}px;"
+        self.log_view.setStyleSheet(css)
+        self.terminal_view.setStyleSheet(css)
 
     def clear_log(self) -> None:
         """清除日志（视图 + 缓存）"""

@@ -14,7 +14,18 @@ class CheckStamina(TaskStep):
     is_generic = True
 
     def execute(self, context: Any = None) -> StepResult:
-        min_stamina = self.params.get("min_stamina", 30)
+        # 体力门槛：params.min_stamina 优先，其次 task_config.stamina_required
+        # （UI「战斗配置→体力门槛」保存，经 scheduler→task_config 透传；0=不检查）
+        min_stamina = self.params.get("min_stamina", None)
+        if min_stamina is None and context is not None:
+            tc = getattr(context, 'task_config', None) or {}
+            min_stamina = tc.get("stamina_required")
+        if min_stamina is None:
+            min_stamina = 30
+        min_stamina = int(min_stamina or 0)
+        if min_stamina <= 0:
+            return StepResult(status=StepStatus.SUCCESS, message="体力门槛未设置，不检查")
+
         # 实际通过 OCR 识别体力值
         # current = ocr_locator.find_text(screenshot, "体力")
         # stamina = parse_stamina(current)

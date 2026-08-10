@@ -13,15 +13,16 @@ from PyQt5.QtWidgets import (
 )
 
 # §3.8 可显隐面板（key, 显示名, 默认可见）
+# 注：
+#  - 「配置」与「UI 设置」已合并为「设置」面板（两个 Tab）
+#  - 「设置」为元控制面板，**不可隐藏**（否则无 UI 入口恢复）→ 不列入
 _PANEL_TOGGLE_ITEMS = [
     ("game_task", "游戏任务", True),
     ("task_queue", "任务队列", True),
     ("task_manager", "任务管理", True),
-    ("config", "配置", True),
     ("image", "素材管理", True),
     ("accounts", "小号管理", True),
     ("history", "执行历史", True),
-    ("ui_settings", "UI 设置", True),
 ]
 
 
@@ -31,6 +32,7 @@ class UISettingsPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._panel_checks: dict[str, QCheckBox] = {}
+        self._log_panel = None  # MainWindow 创建后经 bind_log_panel 注入
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -61,11 +63,13 @@ class UISettingsPanel(QWidget):
         self.log_level_combo = QComboBox()
         self.log_level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         self.log_level_combo.setCurrentText("INFO")
+        self.log_level_combo.currentTextChanged.connect(self._apply_log_level)
         log_layout.addWidget(QLabel("日志级别:"))
         log_layout.addWidget(self.log_level_combo)
 
         self.auto_scroll_cb = QCheckBox("自动滚动")
         self.auto_scroll_cb.setChecked(True)
+        self.auto_scroll_cb.toggled.connect(self._apply_auto_scroll)
         log_layout.addWidget(self.auto_scroll_cb)
 
         layout.addWidget(log_group)
@@ -77,6 +81,7 @@ class UISettingsPanel(QWidget):
         self.font_size_slider = QSlider(Qt.Horizontal)
         self.font_size_slider.setRange(8, 24)
         self.font_size_slider.setValue(12)
+        self.font_size_slider.valueChanged.connect(self._apply_font_size)
         font_layout.addWidget(QLabel("字体大小:"))
         font_layout.addWidget(self.font_size_slider)
 
@@ -107,6 +112,38 @@ class UISettingsPanel(QWidget):
 
         # 弹簧
         layout.addStretch()
+
+    # ── §3.8 日志设置联动（LogPanel） ─────────────────────
+
+    def bind_log_panel(self, log_panel) -> None:
+        """绑定 LogPanel（MainWindow 创建后调用）：应用当前控件值并建立实时联动。"""
+        self._log_panel = log_panel
+        self._apply_log_level(self.log_level_combo.currentText())
+        self._apply_auto_scroll(self.auto_scroll_cb.isChecked())
+        self._apply_font_size(self.font_size_slider.value())
+
+    def _resolve_log_panel(self):
+        """获取 LogPanel：优先已绑定引用，其次从顶层窗口查找（容错）"""
+        lp = getattr(self, '_log_panel', None)
+        if lp is None:
+            win = self.window()
+            lp = getattr(win, 'log_panel', None) if win is not None else None
+        return lp
+
+    def _apply_log_level(self, level: str) -> None:
+        lp = self._resolve_log_panel()
+        if lp is not None and hasattr(lp, 'set_level_filter'):
+            lp.set_level_filter(level)
+
+    def _apply_auto_scroll(self, checked: bool) -> None:
+        lp = self._resolve_log_panel()
+        if lp is not None and hasattr(lp, 'set_auto_scroll'):
+            lp.set_auto_scroll(checked)
+
+    def _apply_font_size(self, size: int) -> None:
+        lp = self._resolve_log_panel()
+        if lp is not None and hasattr(lp, 'set_log_font_size'):
+            lp.set_log_font_size(size)
 
     # ── §3.8 主题切换 ─────────────────────────────────────
 

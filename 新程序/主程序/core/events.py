@@ -105,7 +105,6 @@ class Events:
 
     # ── 调度事件 schedule ───────────────────────────────────
     SCHEDULE_UPDATED: Final[str] = "schedule_updated"
-    DAILY_RESET: Final[str] = "daily_reset"
     TASK_DUE: Final[str] = "task_due"
 
     # ── 触发监控 trigger ────────────────────────────────────
@@ -117,6 +116,7 @@ class Events:
     # ── 场景事件 scene ──────────────────────────────────────
     SCENE_UNKNOWN: Final[str] = "scene_unknown"
     SCENE_UPDATED: Final[str] = "scene_updated"  # 场景感知命中（detect_scene/probe_scene），07 维护 current_scene、11 显示当前场景
+    SCENE_SIGNAL: Final[str] = "scene_signal"    # 识图素材信号触发：scene/ 素材（配置了 signal）被识别命中时发布（signal=信号名）
 
     # ── 应用事件 app ────────────────────────────────────────
     APP_STARTED: Final[str] = "app_started"

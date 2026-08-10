@@ -142,6 +142,43 @@ class TaskBridge:
             for k, v in config.items():
                 self._config.set(f"tasks.{name}.{k}", v, source="TaskBridge.save")
 
+    # ── §5.2 任务图片配置（逻辑名 → 素材路径）──────────────
+
+    def get_task_asset_refs(self, name: str) -> list[dict[str, Any]]:
+        """
+        获取任务图片引用清单（代码扫描 + tasks.yaml images 映射合并）。
+
+        返回 [{ref, mapped}]：ref=任务代码引用的素材名（逻辑名），
+        mapped=images 配置中映射的素材路径（未配置为 None）。
+        """
+        refs: list[str] = []
+        if self._file_mgr and hasattr(self._file_mgr, 'get_task_asset_refs'):
+            try:
+                refs = self._file_mgr.get_task_asset_refs(name)
+            except Exception:
+                refs = []
+        images: dict = {}
+        if self._config and hasattr(self._config, 'get_task_config'):
+            try:
+                cfg = self._config.get_task_config(name)
+                if cfg:
+                    images = cfg.get("images") or {}
+            except Exception:
+                images = {}
+        out = []
+        for ref in refs:
+            out.append({"ref": ref, "mapped": images.get(ref)})
+        return out
+
+    def save_task_images(self, name: str, images: dict[str, Any]) -> None:
+        """保存任务图片映射到 tasks.yaml 的 images 字段（§5.2）"""
+        if not self._config:
+            return
+        if hasattr(self._config, 'update_task'):
+            self._config.update_task(name, images=images)
+        elif self._config:
+            self._config.set(f"tasks.{name}.images", images, source="TaskBridge")
+
     def get_dependency_graph(self) -> dict[str, list[str]]:
         """获取任务依赖图（§5.3）"""
         if self._registry and hasattr(self._registry, 'get_dependency_graph'):
@@ -188,6 +225,18 @@ class TaskBridge:
             if nrt:
                 return nrt.strftime("%Y-%m-%d %H:%M")
         return None
+
+    def get_cycle_progress(self, name: str) -> tuple[int, int | None]:
+        """查询任务活动循环进度：(已累计循环次数, 活动循环次数上限)。
+
+        供 UI「活动循环次数」旁显示「已循环 x/y 轮」。
+        """
+        if self._scheduler and hasattr(self._scheduler, 'get_cycle_progress'):
+            try:
+                return self._scheduler.get_cycle_progress(name)
+            except Exception:
+                pass
+        return 0, None
 
     def reload_scheduler(self, task_name: str | None = None) -> None:
         """热重载任务配置（保存后立即生效）

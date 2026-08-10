@@ -44,8 +44,11 @@ def main():
     for g in groups:
         for lbl in g.findChildren(QLabel):
             titles.append(lbl.text())
-    assert any("任务图片" in t for t in titles), f"应有任务图片区: {titles}"
-    print(f"② PASS 详情渲染：类型标签「战斗任务」+ 图片区（{titles}）")
+    # 已统一到素材管理：任务管理不再有"任务图片区/打开图片文件夹"，只保留"图片设置"
+    assert any("图片设置" in t for t in titles), f"应有图片设置区: {titles}"
+    assert not any("任务图片" in t or "打开图片文件夹" in t for t in titles), \
+        f"不应有任务图片区: {titles}"
+    print(f"② PASS 详情渲染：类型标签「战斗任务」+ 图片设置区（{titles}）")
 
     # ③ 通用模块详情：标注通用·不单独执行
     panel._current_is_generic = True

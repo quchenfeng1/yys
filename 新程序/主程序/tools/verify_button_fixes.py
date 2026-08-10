@@ -24,10 +24,11 @@ def check(name, cond):
         fail += 1
         print(f"❌ {name}")
 
-# ① 菜单树含 UI 设置入口
+# ① 菜单树含设置入口（配置+UI设置已合并为「设置」）
 from ui.panels.menu_tree import MenuTree
 mt = MenuTree()
-check("菜单树含 ui_settings 项", "ui_settings" in mt._items)
+check("菜单树含设置项", "config" in mt._items)
+check("菜单树无独立 ui_settings 项", "ui_settings" not in mt._items)
 
 # ② 控制栏含沙盒开关 + 自检按钮 + 信号
 from ui.panels.control_bar import ControlBar
@@ -57,12 +58,20 @@ check("游戏任务面板可正常实例化", gp is not None)
 check("游戏任务面板已移除批量编辑按钮", not hasattr(gp, 'btn_batch'))
 check("游戏任务面板已移除导入日历", not hasattr(gp, '_import_calendar'))
 
-# ⑤ UI 设置面板含主题切换 + 面板显隐
+# ⑤ UI 设置面板含主题切换 + 面板显隐（合并后 6 项可隐藏；
+# 「设置」面板为元控制面板，不可隐藏 → 不列入）
 from ui.panels.ui_settings_panel import UISettingsPanel
 up = UISettingsPanel()
 check("UI设置含 _set_theme", hasattr(up, '_set_theme'))
 check("UI设置含 _toggle_panel", hasattr(up, '_toggle_panel'))
-check("UI设置含面板显隐复选框", len(up._panel_checks) >= 8)
+check("UI设置含面板显隐复选框", len(up._panel_checks) >= 6)
+
+# ⑤.5 设置面板（配置 + UI设置 两个 Tab）
+from ui.panels.settings_panel import SettingsPanel
+sp = SettingsPanel()
+check("设置面板含 2 个 Tab", sp.tabs.count() == 2)
+check("Tab1 为全局配置", "全局配置" in sp.tabs.tabText(0))
+check("Tab2 为界面设置", "界面设置" in sp.tabs.tabText(1))
 
 # ⑥ 日志面板含筛选/清除/导出
 from ui.panels.log_panel import LogPanel
@@ -93,4 +102,26 @@ check("MainWindow 含 set_theme", "def set_theme" in src)
 check("MainWindow 含 _on_self_check", "def _on_self_check" in src)
 
 print(f"\n🎉 按钮功能修复验证 {ok}/{ok + fail} 通过")
+
+# 退出前清理：停止 EventBus 分发线程 + 显式析构 Qt 控件，
+# 避免 offscreen 下 Qt C++ 层退出竞态导致 SIGSEGV（真实程序走事件循环无此问题）
+try:
+    from core.event_bus import get_global_bus
+    get_global_bus().stop()
+except Exception:
+    pass
+import gc
+for _w in (mt, cb, gp, up, sp, lp):
+    try:
+        _w.deleteLater()
+    except Exception:
+        pass
+_app = QApplication.instance()
+if _app is not None:
+    try:
+        _app.processEvents()
+    except Exception:
+        pass
+gc.collect()
+
 sys.exit(0 if fail == 0 else 1)
