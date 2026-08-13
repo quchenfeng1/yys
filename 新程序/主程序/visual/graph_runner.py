@@ -37,7 +37,11 @@ def _find_next(graph: dict, node_id: str, port: str) -> tuple[str | None, str | 
 
 
 def _eval_until(condition: str, ctx: GraphContext) -> bool:
-    """直到条件求值：'变量 op 值'（与分支同款比较）"""
+    """直到条件求值：'变量 op 值'（与分支同款比较）。
+
+    值支持字面量（数字/文本）或变量引用（如 target 引用 vars['target']），
+    便于循环次数由任务配置/变量动态驱动。
+    """
     import re
     if not condition:
         return False
@@ -46,6 +50,9 @@ def _eval_until(condition: str, ctx: GraphContext) -> bool:
         return False
     name, op, val = m.group(1), m.group(2), m.group(3).strip()
     a = ctx.get_var(name, 0)
+    # 右值支持变量引用：值名存在于变量/数据流中时取其实际值
+    if val in ctx.vars or val in ctx.data:
+        val = ctx.get_var(val, val)
     try:
         a = float(a)
         val = float(val)
@@ -109,6 +116,12 @@ def run_graph(graph: dict, ctx: GraphContext,
                                   error_message=f"节点不存在: {current_id}",
                                   vars=ctx.vars, data=ctx.data)
 
+        # 每次从 in 端口进入 loop → 重置该循环计数。
+        # （loop_back 路径在下方回跳逻辑处理，能到主循环顶部的 loop 必是从 in 进入，
+        #   保证嵌套循环内层每轮都从 0 重新计数）
+        if node.get("type") == "loop":
+            loop_counters[node["id"]] = 0
+
         result = dispatch(node, ctx)
 
         # 数据流收集（节点输出 → ctx.data，供后续引用）
@@ -129,28 +142,27 @@ def run_graph(graph: dict, ctx: GraphContext,
         goto = result.goto or "out"
         next_id, in_port = _find_next(graph, current_id, goto)
 
-        # 循环回跳处理：目标是 loop 且进入端口为 loop_back
-        if next_id is not None and in_port == "loop_back":
+        # 循环回跳处理：目标是 loop 且进入端口为 loop_back。
+        # 用 while 支持嵌套循环——内层 loop.done 连到外层 loop.loop_back 时，
+        # 需要继续按外层 loop 的回跳逻辑处理（计数/条件判断），否则外层永不退出。
+        while next_id is not None and in_port == "loop_back":
             next_node = vs.find_node(graph, next_id)
-            if next_node is not None and next_node.get("type") == "loop":
-                lid = next_id
-                loop_counters[lid] = loop_counters.get(lid, 0) + 1
-                params = next_node.get("params", {})
-                mode = params.get("mode", "固定次数")
-                max_count = int(params.get("count", 3))
-                if mode == "直到条件":
-                    if _eval_until(params.get("condition", ""), ctx):
-                        next_id, _ = _find_next(graph, lid, "done")
-                    else:
-                        next_id, _ = _find_next(graph, lid, "out")
-                elif loop_counters[lid] >= max_count:
-                    next_id, _ = _find_next(graph, lid, "done")
+            if next_node is None or next_node.get("type") != "loop":
+                break
+            lid = next_id
+            loop_counters[lid] = loop_counters.get(lid, 0) + 1
+            params = next_node.get("params", {})
+            mode = params.get("mode", "固定次数")
+            max_count = int(params.get("count", 3))
+            if mode == "直到条件":
+                if _eval_until(params.get("condition", ""), ctx):
+                    next_id, in_port = _find_next(graph, lid, "done")
                 else:
-                    next_id, _ = _find_next(graph, lid, "out")
-                if next_id is None:
-                    break
-                current_id = next_id
-                continue
+                    next_id, in_port = _find_next(graph, lid, "out")
+            elif loop_counters[lid] >= max_count:
+                next_id, in_port = _find_next(graph, lid, "done")
+            else:
+                next_id, in_port = _find_next(graph, lid, "out")
 
         if next_id is None:
             # goto 端口无连线 → 图自然结束
