@@ -101,7 +101,7 @@ def main():
         print(f"  [{lvl:7s}] {msg}")
     get_global_bus().subscribe(Events.LOG_RECORD, _on_log)
 
-    from tasks.daily.daily_test import build_graph
+    from games.yys.tasks.daily.daily_test import build_graph
     ctx = TaskContext(
         task_id="daily_test", task_name="daily_test",
         executor=ex, recognizer=rec, stop_event=threading.Event(),

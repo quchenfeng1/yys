@@ -191,7 +191,7 @@ def main():
     # ════════════ 4. CoopHost 完整流程 ════════════
     print("\n── [4/6] CoopHost 组队协调完整流程 ──")
     # 构造一个"跟随连接切换"的 Executor：识别器用连接池截图 + 同时识别大/小号素材
-    from tasks.common.coop_host import CoopHost
+    from games.yys.tasks.common.coop_host import CoopHost
 
     # CoopHost 内部用 context.executor.click_if_exists；executor 的 recognizer
     # 必须能看到"当前设备"的截图。每个设备截图只含自己的素材 → 命中各自

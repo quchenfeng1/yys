@@ -62,7 +62,7 @@ def verify_taskstep_construct() -> None:
     check("execute 返回成功", s.execute().success)
 
     # 显式传参仍兼容（通用模块写法）
-    from tasks.common.close_popup import ClosePopup
+    from games.yys.tasks.common.close_popup import ClosePopup
     cp = ClosePopup(step_id="close_popup")
     check("显式 step_id 兼容", cp.step_id == "close_popup", f"实际 {cp.step_id}")
 
@@ -120,7 +120,7 @@ def verify_scheduler_rounds() -> None:
     from core.scheduler import Scheduler, TaskConfig, RepeatConfig, ScheduleStatus
     from core.task_state import TaskStateStore
 
-    store = TaskStateStore(path=str(ROOT / "config/runtime/verify_task_state.json"))
+    store = TaskStateStore(path=str(ROOT / "games/yys/runtime/verify_task_state.json"))
     sched = Scheduler(config=None, store=store)
     tz = timezone(timedelta(hours=8))
     now = datetime.now(tz)
@@ -204,7 +204,7 @@ def verify_task_config_injection() -> None:
     reg = TaskRegistry()
     reg.register(ConfigTask)
 
-    store = TaskStateStore(path=str(ROOT / "config/runtime/verify_task_state.json"))
+    store = TaskStateStore(path=str(ROOT / "games/yys/runtime/verify_task_state.json"))
     sched = Scheduler(config=None, store=store)
     sched._tasks["config_task"] = TaskConfig(
         name="config_task",
@@ -219,7 +219,7 @@ def verify_task_config_injection() -> None:
 
     rc = RunController(
         scheduler=sched, registry=reg, monitor=None, state_mgr=None,
-        runtime_progress_path=str(ROOT / "config/runtime/verify_progress.json"),
+        runtime_progress_path=str(ROOT / "games/yys/runtime/verify_progress.json"),
     )
     ok = rc._execute_task_once("config_task")
     check("任务执行成功", ok)
@@ -351,7 +351,7 @@ def verify_advance_logic() -> None:
 def verify_battle_loop_resume() -> None:
     print("\n[7/7] BattleLoop 断点续跑（20/100 → 再执行 80 场）")
     from tasks.base.task_context import TaskContext
-    from tasks.common.battle_loop import BattleLoop
+    from games.yys.tasks.common.battle_loop import BattleLoop
 
     # ① 有进度 20/100 → 从 20 继续，再执行 80 场
     calls: list = []

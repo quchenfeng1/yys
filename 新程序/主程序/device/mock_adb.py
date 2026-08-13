@@ -122,6 +122,9 @@ class MockADBClient:
         y = 60
         for name, tpl in self._templates.items():
             th, tw = tpl.shape[:2]
+            if tw > self.SCREEN_W:
+                # 超宽模板放不下屏幕，跳过（避免广播越界）
+                continue
             if th > self.SCREEN_H - y:
                 break
             x = 100

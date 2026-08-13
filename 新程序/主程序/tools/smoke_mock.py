@@ -39,7 +39,11 @@ def main() -> int:
     failed = False
 
     # ── 1. 配置读取 ──────────────────────────────────────────
-    cfg = ConfigManager(config_dir=str(ROOT / "config"))
+    cfg = ConfigManager(
+        config_dir=str(ROOT / "config"),
+        game_tasks_yaml=str(ROOT / "games/yys/tasks.yaml"),
+        game_coords_dir=str(ROOT / "games/yys/coords"),
+    )
     cfg.load()
     mock_enabled = bool(cfg.global_config.device.mock)
     print(f"[1] device.mock = {mock_enabled}")
@@ -65,7 +69,7 @@ def main() -> int:
     )
 
     # ── 3. 连接（模拟） ─────────────────────────────────────
-    mock = MockADBClient(assets_dir=str(ROOT / "assets"))
+    mock = MockADBClient(assets_dir=str(ROOT / "games/yys/assets"))
     conn = ConnectionManager(adb_client=mock, config=cfg, event_bus=bus, state_manager=sm)
 
     ok = conn.connect()
@@ -95,7 +99,7 @@ def main() -> int:
         event_bus=bus,
         monitor=mon,
         account_mgr=None,
-        runtime_progress_path=str(ROOT / "config/runtime/smoke_progress.json"),
+        runtime_progress_path=str(ROOT / "games/yys/runtime/smoke_progress.json"),
     )
 
     logs.clear()

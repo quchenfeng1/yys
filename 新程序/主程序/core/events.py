@@ -152,6 +152,14 @@ class Events:
     BOOTSTRAP_COMPLETED: Final[str] = "bootstrap.completed"
     BOOTSTRAP_ERROR: Final[str] = "bootstrap.error"
 
+    # ── 可视化构建事件 visual（17-可视化构建模块）────────────
+    VISUAL_TASK_CHANGED: Final[str] = "visual.task_changed"       # 可视化任务保存/删除 → UI 刷新
+    VISUAL_UNKNOWN: Final[str] = "visual.unknown"                 # 示教运行遇未知画面（截图路径+信息）
+    VISUAL_TEACH_BLOCKED: Final[str] = "visual.teach_blocked"     # 示教阻断开始
+    VISUAL_TEACH_RESUMED: Final[str] = "visual.teach_resumed"     # 示教恢复
+    VISUAL_ACTION_RECEIVED: Final[str] = "visual.action_received" # 用户指示（场景/点击点/规则）
+    VISUAL_TEACH_PROGRESS: Final[str] = "visual.teach_progress"   # 示教运行日志
+
     @classmethod
     def all(cls) -> list[str]:
         """返回所有事件名列表"""

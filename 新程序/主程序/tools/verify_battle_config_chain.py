@@ -108,7 +108,7 @@ tasks:
     check("TaskGraph 熔断=10", g._max_fail_streak == 10, str(g._max_fail_streak))
 
     # 5. combat_test 从 task_config 读战斗配置
-    from tasks.special.combat_test import _load_battle_config
+    from games.yys.tasks.special.combat_test import _load_battle_config
     bc = _load_battle_config(TaskContext(task_id="combat_test", task_config=tc))
     check("combat_test.soul_setup.group", bc["soul_setup"]["group"] == "御魂副本")
     check("combat_test.lock_team", bc["lock_team"] is True)

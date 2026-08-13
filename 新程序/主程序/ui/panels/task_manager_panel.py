@@ -44,7 +44,8 @@ class AssetPickerDialog(QDialog):
         self._images: list[dict] = []
 
         from core.asset_catalog import AssetCatalog
-        base = Path(assets_dir) if assets_dir else Path(__file__).resolve().parents[2] / "assets"
+        from core.game_profile import current_game_assets
+        base = Path(assets_dir) if assets_dir else current_game_assets()
         catalog = AssetCatalog(base)
         # 任务引用的都是"控制素材"（tasks/_shared/ 按钮/控件）；识图素材由场景识别模块统一处理
         self._images = catalog.list_shared_images()

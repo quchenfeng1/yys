@@ -38,6 +38,15 @@ class ApplicationBootstrap:
         self._root = Path(root_dir).resolve()
         self._bus = get_global_bus()
 
+        # 18-游戏解耦：当前游戏档案（默认 yys，可由 YYS_GAME 环境变量切换）
+        import os
+        from core.game_profile import GameProfile
+        self._game = GameProfile(
+            root=self._root,
+            game_id=os.environ.get("YYS_GAME", "yys"),
+        )
+        self._game.ensure_dirs()
+
         # §2.1 模块实例字典
         self._components: dict[str, Any] = {}
         self._modules = self._components  # 说明书 §2.1 要求名
@@ -87,6 +96,9 @@ class ApplicationBootstrap:
             # ── 第6层：运行控制 ────────────────────────────
             ("L6_run_controller", self._init_run_controller),
 
+            # ── 第6.5层：可视化构建（17-可视化构建模块）──────
+            ("L6_visual", self._init_visual),
+
             # ── 第7层：用户界面 ────────────────────────────
             ("L7_ui", self._init_ui),
         ]
@@ -128,6 +140,9 @@ class ApplicationBootstrap:
         cfg = ConfigManager(
             config_dir=str(self._root / "config"),
             event_bus=self._bus,
+            # 18-游戏解耦：tasks.yaml/coords 在游戏目录
+            game_tasks_yaml=str(self._game.tasks_yaml),
+            game_coords_dir=str(self._game.coords_dir),
         )
         cfg.load()
         self._store("config_manager", cfg)
@@ -188,7 +203,7 @@ class ApplicationBootstrap:
         adb = None
         if mock_enabled:
             from device.mock_adb import MockADBClient
-            adb = MockADBClient(assets_dir=str(self._root / "assets"))
+            adb = MockADBClient(assets_dir=str(self._game.assets_dir))
             mon = self._get("monitor")
             if mon and hasattr(mon, 'info'):
                 mon.info("已启用模拟设备模式（无真实模拟器）", module="16-应用启动引导")
@@ -218,7 +233,7 @@ class ApplicationBootstrap:
 
         # 先初始化 ImageManager
         img_mgr = ImageManager()
-        asset_dir = self._root / "assets"
+        asset_dir = self._game.assets_dir
         if asset_dir.exists():
             for subdir in sorted(asset_dir.iterdir()):
                 if subdir.is_dir():
@@ -232,6 +247,7 @@ class ApplicationBootstrap:
             config=cfg,
             monitor=self._get("monitor"),
             threshold=cfg.global_config.image.template_threshold,
+            asset_dir=str(self._game.assets_dir),
         )
         self._store("recognizer", recognizer)
 
@@ -260,9 +276,9 @@ class ApplicationBootstrap:
         cfg = self._get("config_manager")
         state = self._get("state_manager")
 
-        # 创建持久化存储
+        # 创建持久化存储（18-游戏解耦：runtime 在游戏目录）
         store = TaskStateStore(
-            path=str(self._root / "config/runtime/task_state.json"),
+            path=str(self._game.task_state_path),
         )
 
         sched = Scheduler(
@@ -297,15 +313,37 @@ class ApplicationBootstrap:
             event_bus=self._bus,
             state_manager=self._get("state_manager"),
         )
-        registry.scan()
+        # 18-游戏解耦：扫描游戏任务包（games.{game_id}.tasks）
+        registry.scan(package=self._game.task_package)
+
+        # 17-可视化构建：注册可视化任务（games/{game}/visual_tasks/*.json）
+        try:
+            from visual import VisualTask, VisualTaskStore
+            vstore = VisualTaskStore(self._game.visual_tasks_dir)
+            for meta in vstore.list():
+                try:
+                    defn = vstore.load(meta["name"])
+                except Exception:
+                    continue
+                cls = type(defn.get("name", meta["name"]), (VisualTask,), {
+                    "task_id": defn.get("name", meta["name"]),
+                    "category": defn.get("category", "daily"),
+                    "_display_name": defn.get("display_name", "") or meta["name"],
+                    "_definition": defn,
+                    "_assets_dir": str(self._game.assets_dir),
+                })
+                registry.register(cls)
+        except Exception:
+            pass
+
         self._store("task_registry", registry)
 
     def _init_task_manager(self) -> None:
         """初始化任务文件管理（§3.2 L4-⑪）"""
         from core.task_manager import TaskManager
         tm = TaskManager(
-            tasks_dir=str(self._root / "tasks"),
-            assets_dir=str(self._root / "assets"),
+            tasks_dir=str(self._game.tasks_dir),
+            assets_dir=str(self._game.assets_dir),
         )
         tm.scan_all()
         self._store("task_manager", tm)
@@ -360,7 +398,7 @@ class ApplicationBootstrap:
             event_bus=self._bus,
             monitor=self._get("monitor"),
             account_mgr=self._get("account_manager"),
-            runtime_progress_path=str(self._root / "config/runtime/task_runtime_progress.json"),
+            runtime_progress_path=str(self._game.task_runtime_progress_path),
         )
         self._store("run_controller", rc)
         self._add_shutdown_hook("run_controller", "stop")
@@ -368,7 +406,7 @@ class ApplicationBootstrap:
         # 注入识图信号映射（scene/ 素材 → 信号名，来自 assets manifest）
         try:
             from core.asset_meta import AssetMetaStore
-            meta = AssetMetaStore(self._root / "assets")
+            meta = AssetMetaStore(self._game.assets_dir)
             rc.set_signal_map(meta.all_signals())
         except Exception:
             pass
@@ -380,6 +418,47 @@ class ApplicationBootstrap:
                 bridge.run.set_controller(rc)
             except Exception:
                 pass
+
+    # ── 第6.5层：可视化构建（17-可视化构建模块）──────────────
+
+    def _init_visual(self) -> None:
+        """17-可视化构建：规则库 + 示教引擎 + 可视化桥（可选加载）"""
+        try:
+            from visual.rule_store import VisualTaskStore
+            from visual.teach_engine import TeachEngine
+            from visual.operation_store import OperationStore
+            from ui.param_bridge.visual_bridge import VisualBridge
+
+            store = VisualTaskStore(self._game.visual_tasks_dir)
+            # 通用操作（4.26）：跨游戏共享 + 游戏内
+            op_store = OperationStore([
+                self._game.shared_operations_dir,
+                self._game.operations_dir,
+            ])
+            teach = TeachEngine(
+                event_bus=self._bus,
+                store=store,
+                assets_dir=str(self._game.assets_dir),
+                executor=self._get("executor"),
+                recognizer=self._get("recognizer"),
+                anti_detect=self._get("anti_detect"),
+                monitor=self._get("monitor"),
+            )
+            vbridge = VisualBridge(
+                event_bus=self._bus,
+                store=store,
+                teach_engine=teach,
+                game_profile=self._game,
+                registry=self._get("task_registry"),
+                assets_dir=str(self._game.assets_dir),
+                operation_store=op_store,
+            )
+            self._store("visual_store", store)
+            self._store("operation_store", op_store)
+            self._store("teach_engine", teach)
+            self._store("visual_bridge", vbridge)
+        except Exception:
+            pass  # 可视化构建为可选能力，初始化失败不阻断启动
 
     # ── 第7层：用户界面 ───────────────────────────────────
 
@@ -393,6 +472,7 @@ class ApplicationBootstrap:
             param_bridge=self._get("bridge"),
             event_bus=self._bus,
             image_mgr=img_mgr,
+            visual_bridge=self._get("visual_bridge"),
         )
         window.refresh_task_list()
         self._store("main_window", window)

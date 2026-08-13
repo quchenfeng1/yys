@@ -35,7 +35,10 @@ def discover_tasks(package: str | None = None) -> dict[str, Type[BaseTask]]:
     discovered: dict[str, Type[BaseTask]] = {}
 
     if package:
-        modules = _scan_package(package)
+        # 18-游戏解耦：扫 games.{game}.tasks 全包（daily/event/permanent/special/battle），
+        # 排除 common（通用步骤）/ base（基类）子包
+        modules = [m for m in _scan_package(package)
+                   if ".common" not in m and ".base" not in m]
     else:
         # 只扫描具体任务目录，排除 base/（基类）和 common/（通用步骤）
         modules = []

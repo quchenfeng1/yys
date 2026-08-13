@@ -90,7 +90,7 @@ class {_K}(BaseTask):
         \"\"\"声明步骤图（§5.3）：在这里串联你的步骤\"\"\"
         graph = TaskGraph()
         # 例：
-        # from tasks.common.close_popup import ClosePopup
+        # from games.yys.tasks.common.close_popup import ClosePopup
         # graph.add_step("step1", StepOne())
         # graph.add_step("close", ClosePopup())
         # graph.set_entry("step1")
@@ -137,11 +137,11 @@ CHANGE_TEAM = True
 
 
 def _load_battle_config() -> dict:
-    \"\"\"从 config/tasks.yaml 读取本任务的战斗配置，失败回退模块常量。\"\"\"
+    \"\"\"从 tasks.yaml 读取本任务的战斗配置，失败回退模块常量。\"\"\"
     default = {{"soul_setup": SOUL_SETUP, "lock_team": LOCK_TEAM, "change_team": CHANGE_TEAM}}
     try:
         import yaml
-        p = Path(__file__).resolve().parents[2] / "config" / "tasks.yaml"
+        p = Path(__file__).resolve().parents[2] / "tasks.yaml"
         if p.exists():
             data = yaml.safe_load(p.read_text(encoding="utf-8"))
             tasks = data.get("tasks", []) if isinstance(data, dict) else []
@@ -176,7 +176,7 @@ class BattleLoop(TaskStep):
 
     def execute(self, context=None):
         # TODO: 或引用通用模块：
-        # from tasks.common.battle_loop import BattleLoop
+        # from games.yys.tasks.common.battle_loop import BattleLoop
         return StepResult.success("战斗完成")
 
 
@@ -190,8 +190,8 @@ class {_K}(BaseTask):
     def _build_graph(self) -> TaskGraph:
         graph = TaskGraph()
         # 注入战斗配置 + 串联通用模块（例）：
-        # from tasks.common.soul_configure import SoulConfigure
-        # from tasks.common.pre_battle_prep import PreBattlePrep
+        # from games.yys.tasks.common.soul_configure import SoulConfigure
+        # from games.yys.tasks.common.pre_battle_prep import PreBattlePrep
         # cfg = _load_battle_config()
         # graph.add_step("soul", SoulConfigure(params=cfg["soul_setup"]))
         # graph.add_step("prep", PreBattlePrep(params={{'lock_team': cfg['lock_team'],

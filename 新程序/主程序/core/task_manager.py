@@ -79,8 +79,8 @@ class TaskManager:
         self._tasks_dir = Path(tasks_dir) if tasks_dir else (project_root / "tasks")
         self._assets_dir = Path(assets_dir) if assets_dir else (project_root / "assets")
 
-        # §2.3 扫描目录：daily/permanent/event/special
-        self._scan_dirs: list[str] = ["daily", "permanent", "event", "special"]
+        # §2.3 扫描目录：daily/permanent/event/special/battle
+        self._scan_dirs: list[str] = ["daily", "permanent", "event", "special", "battle"]
         self._common_dir: str = "common"
 
         # §2.3 缓存
@@ -364,7 +364,8 @@ class TaskManager:
         if yaml is None:
             return
         try:
-            p = Path(self._tasks_dir).parent / "config" / "tasks.yaml"
+            # 18-游戏解耦：tasks.yaml 与 tasks/ 同层（games/yys/tasks.yaml）
+            p = Path(self._tasks_dir).parent / "tasks.yaml"
             data = {}
             if p.exists():
                 data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}

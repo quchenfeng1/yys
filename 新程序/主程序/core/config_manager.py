@@ -74,8 +74,24 @@ class ConfigManager:
         event_bus: EventBus | None = None,
         enable_hot_reload: bool = True,
         monitor: Any = None,
+        game_tasks_yaml: str | Path | None = None,
+        game_coords_dir: str | Path | None = None,
     ):
+        """
+        18-游戏解耦迁移：
+        - global.yaml/accounts.yaml 始终在 config_dir（全局）
+        - tasks.yaml / coords 默认在 config_dir，可经 game_tasks_yaml /
+          game_coords_dir 指向游戏目录（games/{game_id}/tasks.yaml、coords/）
+        """
         self._config_dir = Path(config_dir)
+        self._game_tasks_path = (
+            Path(game_tasks_yaml) if game_tasks_yaml
+            else self._config_dir / "tasks.yaml"
+        )
+        self._game_coords_dir = (
+            Path(game_coords_dir) if game_coords_dir
+            else self._config_dir / "coords"
+        )
         self._event_bus = event_bus or get_global_bus()
         self._bus = self._event_bus  # 兼容别名
         self._monitor = monitor  # §2.1 日志监控中心（可选）
@@ -86,9 +102,9 @@ class ConfigManager:
         # §2.3 _paths：各配置文件在磁盘上的路径映射
         self._paths: dict[str, str] = {
             "global": str(self._config_dir / "global.yaml"),
-            "tasks": str(self._config_dir / "tasks.yaml"),
+            "tasks": str(self._game_tasks_path),
             "accounts": str(self._config_dir / "accounts.yaml"),
-            "coords": str(self._config_dir / "coords"),
+            "coords": str(self._game_coords_dir),
         }
 
         # §2.3 _cache：内存中的完整配置数据副本（嵌套 dict）
@@ -190,7 +206,7 @@ class ConfigManager:
         self._global = validated
 
     def _load_tasks_internal(self) -> None:
-        path = self._config_dir / "tasks.yaml"
+        path = self._game_tasks_path
         if not path.exists():
             raise ConfigNotFoundError(f"任务配置文件不存在: {path}")
         raw = _yaml_load(path)
@@ -231,8 +247,8 @@ class ConfigManager:
         return self._accounts
 
     def load_coords(self, name: str) -> dict[str, Any]:
-        """加载坐标文件 config/coords/{name}.json"""
-        path = self._config_dir / "coords" / f"{name}.json"
+        """加载坐标文件 {coords_dir}/{name}.json（游戏 coords 或全局 coords）"""
+        path = self._game_coords_dir / f"{name}.json"
         if not path.exists():
             raise ConfigNotFoundError(f"坐标文件不存在: {path}")
         with open(path, "r", encoding="utf-8") as f:
@@ -390,11 +406,14 @@ class ConfigManager:
                             )
 
             self._watcher = _ObserverCls()
-            self._watcher.schedule(
-                _ConfigHandler(self),
-                str(self._config_dir),
-                recursive=False,
-            )
+            # 监听全局配置目录 + 游戏任务配置目录（tasks.yaml 在游戏目录）
+            watch_dirs = {str(self._config_dir), str(self._game_tasks_path.parent)}
+            for wd in watch_dirs:
+                self._watcher.schedule(
+                    _ConfigHandler(self),
+                    wd,
+                    recursive=False,
+                )
             self._watcher.start()
         except ImportError:
             pass  # watchdog 未安装
@@ -424,12 +443,15 @@ class ConfigManager:
         with self._lock:
             tmp_dir = Path(tempfile.mkdtemp(prefix="config_export_"))
             try:
-                for fname in ["global.yaml", "accounts.yaml", "tasks.yaml"]:
-                    src = self._config_dir / fname
+                for fname, src in [
+                    ("global.yaml", self._config_dir / "global.yaml"),
+                    ("accounts.yaml", self._config_dir / "accounts.yaml"),
+                    ("tasks.yaml", self._game_tasks_path),
+                ]:
                     if src.exists():
                         shutil.copy2(str(src), str(tmp_dir / fname))
                 # coords 目录
-                coords_dir = self._config_dir / "coords"
+                coords_dir = self._game_coords_dir
                 if coords_dir.exists():
                     shutil.copytree(str(coords_dir), str(tmp_dir / "coords"),
                                     dirs_exist_ok=True)
@@ -835,14 +857,19 @@ class ConfigManager:
         """原子写入（§3.3 + §4.3：临时文件 + os.replace）"""
         import tempfile
 
-        fname = f"{section}.yaml"
-        path = self._config_dir / fname
+        if section == "tasks":
+            # 18-游戏解耦：tasks.yaml 在游戏目录
+            fname = "tasks.yaml"
+            path = self._game_tasks_path
+        else:
+            fname = f"{section}.yaml"
+            path = self._config_dir / fname
         path.parent.mkdir(parents=True, exist_ok=True)
 
         fd, tmp_path = tempfile.mkstemp(
             suffix=".yaml",
             prefix=f".{fname}.",
-            dir=str(self._config_dir),
+            dir=str(path.parent),
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:

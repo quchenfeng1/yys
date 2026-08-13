@@ -55,8 +55,8 @@ def main():
     print("\n── [B] TaskManager.new_task 实际创建 + tasks.yaml 写入 ──")
     from core.task_manager import TaskManager
     tmp = Path(tempfile.mkdtemp(prefix="task_tmpl_"))
-    (tmp / "config").mkdir(parents=True, exist_ok=True)
-    (tmp / "config" / "tasks.yaml").write_text("tasks:\n", encoding="utf-8")
+    # 18-游戏解耦：tasks.yaml 与 tasks/ 同层（tasks_dir.parent）
+    (tmp / "tasks.yaml").write_text("tasks:\n", encoding="utf-8")
     mgr = TaskManager(tasks_dir=tmp / "tasks", assets_dir=tmp / "assets")
 
     # 战斗任务 → special/，tasks.yaml 追加调度 + 作战配置
@@ -78,7 +78,7 @@ def main():
     assert (tmp / "tasks" / "special" / "new_trigger.py").exists()
 
     import yaml
-    data = yaml.safe_load((tmp / "config" / "tasks.yaml").read_text(encoding="utf-8"))
+    data = yaml.safe_load((tmp / "tasks.yaml").read_text(encoding="utf-8"))
     tasks = data["tasks"]
     names = [t["name"] for t in tasks]
     assert "new_battle" in names and "new_event" in names and "new_trigger" in names
@@ -95,7 +95,7 @@ def main():
         raise AssertionError("同名任务应抛 FileExistsError")
     except FileExistsError:
         pass
-    data2 = yaml.safe_load((tmp / "config" / "tasks.yaml").read_text(encoding="utf-8"))
+    data2 = yaml.safe_load((tmp / "tasks.yaml").read_text(encoding="utf-8"))
     assert sum(1 for t in data2["tasks"] if t["name"] == "new_event") == 1, "yaml 不应重复"
     print("④ PASS 同名任务拒绝创建 + tasks.yaml 不重复追加")
 

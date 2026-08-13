@@ -147,8 +147,8 @@ class GameTaskPanel(QWidget):
         """
         try:
             from core.asset_meta import AssetMetaStore
-            from pathlib import Path
-            assets_dir = Path(__file__).resolve().parents[2] / "assets"
+            from core.game_profile import current_game_assets
+            assets_dir = current_game_assets()
             meta = AssetMetaStore(assets_dir)
             # all_signals: {素材识别名: 信号名}
             return [(sig, rel) for rel, sig in meta.all_signals().items() if sig]
@@ -875,7 +875,9 @@ class GameTaskPanel(QWidget):
                         datetime.fromisoformat(nrt_text),
                     )
                 except ValueError:
-                    pass
+                    # 非法日期 → 降级为热重载（避免配置变更静默不生效）
+                    if hasattr(bridge.task, 'reload_scheduler'):
+                        bridge.task.reload_scheduler(self._current_name)
             else:
                 # 未指定 / 系统值未修改 → 热重载配置（保存立即生效）+ 自动计算下次执行
                 if hasattr(bridge.task, 'reload_scheduler'):

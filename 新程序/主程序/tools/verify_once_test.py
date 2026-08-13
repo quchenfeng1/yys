@@ -106,7 +106,7 @@ def test_task_graph():
         print(f"  [{kw.get('level', 'info'):7s}] {kw.get('message', '')}")
     get_global_bus().subscribe(Events.LOG_RECORD, _on_log)
 
-    from tasks.special.once_test import build_graph
+    from games.yys.tasks.special.once_test import build_graph
     ctx = TaskContext(task_id="once_test", task_name="once_test",
                       executor=ex, recognizer=rec, stop_event=threading.Event())
     result = build_graph(ctx).run(ctx)
@@ -164,7 +164,7 @@ def test_on_enter_semantics():
 def test_trigger_image():
     print("\n── [C] once_test 触发识图任务（trigger_detected → 05 → 到期入队）──")
     from core.event_bus import get_global_bus
-    from tasks.special.once_test import build_graph, TRIGGER_TASK
+    from games.yys.tasks.special.once_test import build_graph, TRIGGER_TASK
 
     bus = get_global_bus()
     s = Scheduler(event_bus=bus, store=FakeStore())

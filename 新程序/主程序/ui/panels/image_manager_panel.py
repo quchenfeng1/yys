@@ -197,7 +197,8 @@ class ImageManagerPanel(QWidget):
     def __init__(self, param_bridge=None, parent=None):
         super().__init__(parent)
         self._bridge = param_bridge
-        self._assets_dir = Path(__file__).resolve().parents[2] / "assets"
+        from core.game_profile import current_game_assets
+        self._assets_dir = current_game_assets()
         self._catalog = AssetCatalog(self._assets_dir)
         self._meta = AssetMetaStore(self._assets_dir)
         self._tag_filter: str = _ALL_TAG  # 当前标签筛选（全部/某标签）

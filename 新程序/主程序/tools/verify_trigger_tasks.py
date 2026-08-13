@@ -173,9 +173,9 @@ def test_trigger_semantics():
 
 def main():
     print("── [A] 手动触发测试任务 ──")
-    _run_task("manual_trigger_test", "tasks.special.manual_trigger_test")
+    _run_task("manual_trigger_test", "games.yys.tasks.special.manual_trigger_test")
     print("── [B] 识图触发测试任务 ──")
-    _run_task("image_trigger_test", "tasks.special.image_trigger_test")
+    _run_task("image_trigger_test", "games.yys.tasks.special.image_trigger_test")
     test_trigger_semantics()
     print("\n🎉 两个 trigger 特殊任务验证 4/4 通过")
 

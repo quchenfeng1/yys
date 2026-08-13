@@ -37,8 +37,8 @@ def main():
     print("\n── [B] TaskManager.new_task 自动建图片文件夹 ──")
     from core.task_manager import TaskManager
     root = Path(tempfile.mkdtemp(prefix="proj_"))
-    (root / "config").mkdir()
-    (root / "config" / "tasks.yaml").write_text("tasks:\n", encoding="utf-8")
+    # 18-游戏解耦：tasks.yaml 与 tasks/ 同层
+    (root / "tasks.yaml").write_text("tasks:\n", encoding="utf-8")
     mgr = TaskManager(tasks_dir=root / "tasks", assets_dir=root / "assets")
     mgr.new_task("special", "pic_battle", "图片战斗", task_type="battle")
     assert (root / "assets" / "tasks" / "pic_battle").exists(), "战斗任务应建专属图片夹"

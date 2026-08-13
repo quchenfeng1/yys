@@ -32,7 +32,7 @@ def main():
     from core.event_bus import EventBus
 
     bus = EventBus()
-    yaml_path = Path(_PROJ_ROOT) / "config" / "tasks.yaml"
+    yaml_path = Path(_PROJ_ROOT) / "games" / "yys" / "tasks.yaml"
     data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     tasks = [to_ns(t) for t in data.get("tasks", [])]
 

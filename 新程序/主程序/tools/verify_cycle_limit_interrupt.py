@@ -21,7 +21,7 @@ if _PROJ_ROOT not in sys.path:
 
 from core.event_bus import EventBus
 from core.scheduler import Scheduler, TaskConfig, RepeatConfig, ScheduleStatus
-from tasks.common.battle_loop import BattleLoop
+from games.yys.tasks.common.battle_loop import BattleLoop
 from tasks.base.task_step import StepStatus
 
 PASS = 0

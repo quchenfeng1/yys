@@ -54,10 +54,12 @@ class MainWindow(QMainWindow):
         param_bridge: Any = None,
         event_bus: EventBus | None = None,
         image_mgr: Any = None,
+        visual_bridge: Any = None,
     ):
         super().__init__()
         self._param_bridge = param_bridge
         self._image_mgr = image_mgr
+        self._visual_bridge = visual_bridge
         self._event_bus = event_bus or get_global_bus()
         self._bus = self._event_bus  # 兼容别名
 
@@ -207,6 +209,15 @@ class MainWindow(QMainWindow):
         for key, title, widget in panels:
             self.panels[key] = widget
             self.central_stack.addWidget(widget)
+
+        # 17-可视化构建：可视化构建面板（节点画布 + 示教控制台）
+        try:
+            from ui.visual_builder.visual_builder_panel import VisualBuilderPanel
+            vb = VisualBuilderPanel(visual_bridge=self._visual_bridge)
+            self.panels["visual_builder"] = vb
+            self.central_stack.addWidget(vb)
+        except Exception:
+            pass
 
         # 连接任务队列面板的"手动触发"信号（触发式任务 → TaskBridge.update_next_run）
         qp = self.panels.get("task_queue")

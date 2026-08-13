@@ -170,7 +170,7 @@ class MockConnection:
 def verify_task_manager(tmp_dir: Path) -> None:
     print("\n[1/8] 素材管理 TaskManager")
     from core.task_manager import TaskManager
-    tm = TaskManager(tasks_dir=str(ROOT / "tasks"), assets_dir=str(tmp_dir))
+    tm = TaskManager(tasks_dir=str(ROOT / "games/yys/tasks"), assets_dir=str(tmp_dir))
     metas = tm.scan_all()
     check("scan_all 扫描到任务", len(metas) >= 0)
     missing = tm.find_missing_assets()

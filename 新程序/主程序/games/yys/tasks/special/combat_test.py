@@ -38,8 +38,8 @@ from core.events import Events
 from tasks.base.base_task import BaseTask
 from tasks.base.task_graph import TaskGraph
 from tasks.base.task_step import StepResult, TaskStep
-from tasks.common.soul_configure import SoulConfigure
-from tasks.common.pre_battle_prep import PreBattlePrep
+from games.yys.tasks.common.soul_configure import SoulConfigure
+from games.yys.tasks.common.pre_battle_prep import PreBattlePrep
 
 
 def _load_battle_config(context: Any = None) -> dict:
@@ -63,7 +63,7 @@ def _load_battle_config(context: Any = None) -> dict:
             }
     # ② 直接读 tasks.yaml（兼容旧保存；task_config 缺失时兜底）
     try:
-        yaml_path = Path(__file__).resolve().parents[2] / "config" / "tasks.yaml"
+        yaml_path = Path(__file__).resolve().parents[2] / "tasks.yaml"
         if yaml_path.exists():
             with open(yaml_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}

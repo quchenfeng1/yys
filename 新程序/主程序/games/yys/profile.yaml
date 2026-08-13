@@ -1,0 +1,8 @@
+# 阴阳师 游戏档案（Game Profile）
+# 本文件夹 = 阴阳师全部专属内容：tasks/ assets/ tasks.yaml coords/ runtime/ visual_tasks/
+game_id: yys
+name: 阴阳师
+description: 阴阳师 yys 自动化（战斗/组队/探索等）
+ocr_lang: ch
+coordinate_mode: relative
+device_defaults: {}

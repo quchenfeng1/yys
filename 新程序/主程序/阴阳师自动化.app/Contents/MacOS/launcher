@@ -1,0 +1,21 @@
+#!/bin/bash
+# 阴阳师自动化工具 - macOS .app 启动器
+# 双击 .app 运行，不弹出终端窗口（macOS 直接执行本脚本，无控制台）
+# 项目根 = 本脚本位置向上三级：Contents/MacOS -> Contents -> .app -> 主程序目录
+cd "$(dirname "$0")/../../.." || exit 1
+
+mkdir -p logs
+
+# 首次运行：创建虚拟环境并安装依赖（已有 .venv 则直接跳过，静默无输出）
+if [ ! -d ".venv" ]; then
+    /usr/bin/python3 -m venv .venv 2>>logs/launcher_stderr.log
+    .venv/bin/pip install --upgrade pip -q 2>>logs/launcher_stderr.log
+    .venv/bin/pip install -q PyQt5 loguru pyyaml numpy opencv-python-headless watchdog 2>>logs/launcher_stderr.log
+fi
+
+# 设置 Qt 平台插件路径（macOS pip 安装 PyQt5 必需）
+export QT_QPA_PLATFORM_PLUGIN_PATH="$PWD/.venv/lib/python3.9/site-packages/PyQt5/Qt5/plugins"
+
+# 启动 UI：程序日志由 loguru 写入 logs/；stderr 追加到 launcher_stderr.log 便于排查崩溃
+exec .venv/bin/python main.py 2>>logs/launcher_stderr.log
+

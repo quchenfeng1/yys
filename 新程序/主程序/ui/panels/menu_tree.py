@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import QListWidget, QListWidgetItem
 _MENU_ORDER = [
     "task_queue",   # 📌 任务队列
     "game_task",    # 📋 游戏任务
+    "visual_builder",  # 🛠 可视化构建
     "task_manager", # 📁 任务管理
     "image",        # 🖼 素材管理
     "accounts",     # 👤 小号管理
@@ -24,6 +25,7 @@ _MENU_ORDER = [
 _MENU_LABEL = {
     "task_queue": "任务队列",
     "game_task": "游戏任务",
+    "visual_builder": "可视化构建",
     "task_manager": "任务管理",
     "image": "素材管理",
     "accounts": "小号管理",
@@ -33,6 +35,7 @@ _MENU_LABEL = {
 _MENU_ICON = {
     "task_queue": "fa5s.tasks",
     "game_task": "fa5s.gamepad",
+    "visual_builder": "fa5s.project-diagram",
     "task_manager": "fa5s.folder-open",
     "image": "fa5s.images",
     "accounts": "fa5s.user",

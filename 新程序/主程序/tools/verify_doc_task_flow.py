@@ -95,8 +95,8 @@ def main():
     print("── [1/7] 用 UI 逻辑新建任务（TaskManager.new_task）──")
     from core.task_manager import TaskManager
     tmp = Path(tempfile.mkdtemp(prefix="doc_task_"))
-    (tmp / "config").mkdir(parents=True, exist_ok=True)
-    (tmp / "config" / "tasks.yaml").write_text("tasks:\n", encoding="utf-8")
+    # 18-游戏解耦：tasks.yaml 与 tasks/ 同层（tasks_dir.parent）
+    (tmp / "tasks.yaml").write_text("tasks:\n", encoding="utf-8")
     mgr = TaskManager(tasks_dir=tmp / "tasks", assets_dir=tmp / "assets")
 
     fp = mgr.new_task(CATEGORY, TASK_NAME, TASK_DISPLAY, task_type="event_task")
@@ -119,7 +119,7 @@ def main():
 
     # ③ tasks.yaml 已自动追加 + 任务图夹已自动创建（文档 §二 三件事）
     import yaml
-    data = yaml.safe_load((tmp / "config" / "tasks.yaml").read_text(encoding="utf-8"))
+    data = yaml.safe_load((tmp / "tasks.yaml").read_text(encoding="utf-8"))
     names = [t["name"] for t in data["tasks"]]
     check("③ tasks.yaml 已追加调度条目", TASK_NAME in names)
     task_img_dir = tmp / "assets" / "tasks" / TASK_NAME
@@ -231,14 +231,14 @@ class DocDemoTask(BaseTask):
     # ════════════ 4. TaskRegistry 注册发现 ════════════
     print("\n── [4/7] TaskRegistry 注册发现（文档 §二 校验）──")
     import importlib
-    import tasks.special as sp
-    # 直接把任务模块注入 tasks.special 包，供 registry 扫描（模拟真实落盘）
+    import games.yys.tasks.special as sp
+    # 直接把任务模块注入 games.yys.tasks.special 包，供 registry 扫描（模拟真实落盘）
     from tasks.registry import discover_tasks
     # 先保证模块可导入：把 tmp 的 tasks 目录接到 sys.path 前
     sys.path.insert(0, str(tmp))
     # 但 registry 扫描的是项目 tasks 包；为验证注册逻辑，直接 import 模块检查类属性
     spec = importlib.util.spec_from_file_location(
-        f"tasks.special.{TASK_NAME}", str(final_path))
+        f"games.yys.tasks.special.{TASK_NAME}", str(final_path))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     check("模块可导入", mod is not None)

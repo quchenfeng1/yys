@@ -99,7 +99,7 @@ def main():
         print(f"  [{kw.get('level', 'info'):7s}] {kw.get('message', '')}")
     get_global_bus().subscribe(Events.LOG_RECORD, _on_log)
 
-    from tasks.special.combat_test import build_graph
+    from games.yys.tasks.special.combat_test import build_graph
     state: dict = {}
     ctx = TaskContext(
         task_id="combat_test", task_name="combat_test",
