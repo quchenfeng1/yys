@@ -44,6 +44,7 @@ class GraphContext:
     dry_run: bool = False
     on_unknown: Callable | None = None           # 未知画面回调（示教）
     get_operation: Callable | None = None        # 通用操作加载器（4.26）
+    scene_loader: Callable | None = None         # 识别素材加载器（SceneStore.load）
     param_values: dict = field(default_factory=dict)  # 参数上浮值（4.27）
     vars: dict = field(default_factory=dict)     # 任务变量
     data: dict = field(default_factory=dict)     # 节点数据流输出
@@ -115,7 +116,16 @@ class GraphContext:
         return vs.find_point(self.task, point_id)
 
     def get_scene(self, scene_id: str) -> dict | None:
-        return vs.find_scene(self.task, scene_id)
+        scene = vs.find_scene(self.task, scene_id)
+        if scene is not None:
+            return scene
+        # 任务内无此场景 → 从识别素材库加载（跨任务复用）
+        if self.scene_loader is not None:
+            try:
+                return self.scene_loader(scene_id)
+            except Exception:
+                return None
+        return None
 
     def get_ocr_region(self, region_id: str) -> dict | None:
         return vs.find_ocr_region(self.task, region_id)
@@ -173,6 +183,21 @@ def _exec_clicker(node: dict, ctx: GraphContext) -> NodeResult:
     point = ctx.get_point(point_id)
     if point is None:
         return NodeResult(status="error", message=f"示教点不存在: {point_id}")
+    # 区域点：框选的点击区域 → 区域内随机点击
+    if point.get("region"):
+        w, h = ctx.screen_size
+        r = vs.region_to_abs(list(point["region"]), w, h)
+        if r:
+            import random
+            x0, y0, rw, rh = r
+            x = random.randint(int(x0), max(int(x0), int(x0 + rw) - 1))
+            y = random.randint(int(y0), max(int(y0), int(y0 + rh) - 1))
+            if ctx.dry_run:
+                _log(ctx, f"[dry] 区域随机点击 {point.get('label', point_id)} @ ({x},{y})")
+            else:
+                ctx.executor.click_position(x, y)
+                _log(ctx, f"区域随机点击 {point.get('label', point_id)} @ ({x},{y})")
+            return NodeResult(data={"point": (x, y)})
     x, y = _abs_point(ctx, point)
     if ctx.dry_run:
         _log(ctx, f"[dry] 点击 {point.get('label', point_id)} @ ({x},{y})")
@@ -246,21 +271,36 @@ def _exec_scene_probe(node: dict, ctx: GraphContext) -> NodeResult:
     params = node.get("params", {})
     scene_id = params.get("scene", "")
     out_var = params.get("output_var", "")
+    # 未设置的图像识别节点：触发示教（截图 + 阻断），等用户录入识别特征
+    if not scene_id:
+        if ctx.on_unknown is not None:
+            try:
+                ctx.on_unknown(ctx.screenshot(),
+                               {"type": "scene_new", "node": node.get("id")})
+            except Exception:
+                pass
+            # 示教恢复后：示教引擎可能已把识别素材 id 回填到本节点
+            scene_id = node.get("params", {}).get("scene", "")
+        if not scene_id:
+            return NodeResult(status="error",
+                              message="图像识别节点未设置识别图（示教后重试）")
     scene = ctx.get_scene(scene_id)
     if scene is None:
         return NodeResult(status="error", message=f"场景不存在: {scene_id}")
-    timeout = float(params.get("timeout", 3))
-    start = time.time()
+    # 判定次数：填 N = 最多进行 N 次截图判定（每次间隔 0.3s）
+    max_attempts = int(params.get("timeout", 3))
+    attempt = 0
     while True:
         if ctx.stopped():
             return NodeResult(status="interrupted")
+        attempt += 1
         hit = _judge_scene(scene, ctx)
         if hit:
             _log(ctx, f"场景命中: {scene.get('name', scene_id)}")
             if out_var:
                 ctx.set_var(out_var, "1")
             return NodeResult(data={"scene": scene_id})
-        if timeout > 0 and time.time() - start > timeout:
+        if max_attempts > 0 and attempt >= max_attempts:
             break
         ctx.sleep(0.3)
     # 未命中
@@ -279,14 +319,30 @@ def _exec_matcher(node: dict, ctx: GraphContext) -> NodeResult:
     template = params.get("template", "")
     index = int(params.get("index", 0) or 0)
     threshold = float(params.get("threshold", 0.85))
-    timeout = float(params.get("timeout", 3))
+    # 判定次数：填 N = 最多 N 次截图识别（每次间隔 0.3s）
+    max_attempts = int(params.get("timeout", 3))
+    region = params.get("region", "")  # 搜索区域 "x,y,w,h"(相对) 或空=全屏
     if not template:
-        return NodeResult(status="error", message="识图器未选择目标元素")
-    start = time.time()
+        # 未设置目标元素 → 触发示教（截图 + 阻断），等用户圈出图标
+        if ctx.on_unknown is not None:
+            try:
+                ctx.on_unknown(ctx.screenshot(),
+                               {"type": "element_new", "node": node.get("id")})
+            except Exception:
+                pass
+            # 示教恢复后：示教引擎可能已回填模板 + 区域
+            template = node.get("params", {}).get("template", "")
+            region = node.get("params", {}).get("region", region)
+        if not template:
+            return NodeResult(status="error",
+                              message="识图器未设置目标元素（示教后重试）")
+    attempt = 0
     while True:
         if ctx.stopped():
             return NodeResult(status="interrupted")
-        match = _match_template(ctx, template, threshold, index=index)
+        attempt += 1
+        match = _match_template(ctx, template, threshold, index=index,
+                                region=region)
         if match is not None:
             _log(ctx, f"识别命中: {template}")
             return NodeResult(data={
@@ -294,7 +350,7 @@ def _exec_matcher(node: dict, ctx: GraphContext) -> NodeResult:
                 "w": match[2], "h": match[3],
                 "template": template,
             })
-        if timeout > 0 and time.time() - start > timeout:
+        if max_attempts > 0 and attempt >= max_attempts:
             break
         ctx.sleep(0.3)
     if ctx.on_unknown is not None:
@@ -513,6 +569,10 @@ def _exec_operation(node: dict, ctx: GraphContext) -> NodeResult:
 # ═══════════════════════════════════════════════════════════════
 
 def _judge_scene(scene: dict, ctx: GraphContext) -> bool:
+    # v2 结构：红框(regions) + 蓝框(markers) + 精度(accuracy)
+    if scene.get("regions"):
+        return _judge_scene_v2(scene, ctx)
+    # 旧结构：judgements + logic（向后兼容）
     judgements = scene.get("judgements", [])
     if not judgements:
         return False
@@ -521,6 +581,66 @@ def _judge_scene(scene: dict, ctx: GraphContext) -> bool:
     if logic == "or":
         return any(results)
     return all(results)
+
+
+def _judge_scene_v2(scene: dict, ctx: GraphContext) -> bool:
+    """v2 场景判定：遍历 红框(搜索范围)→蓝框(整体标识) 匹配，命中数 >= 精度 即通过。
+
+    每个蓝框 = 一组独立遮罩块（连通域），整体匹配要求每个块都命中
+    且相对位置对应。accuracy=0 表示全部蓝框命中。
+    """
+    regions = scene.get("regions", [])
+    if not regions:
+        return False
+    accuracy = int(scene.get("accuracy", 0) or 0)
+    total = 0
+    hits = 0
+    for region in regions:
+        rr = region.get("region")  # 红框搜索范围 [x,y,w,h] 相对，None=全屏
+        for marker in region.get("markers", []):
+            total += 1
+            if _match_marker(marker, ctx, region=rr):
+                hits += 1
+    need = accuracy if accuracy > 0 else total
+    if need <= 0:
+        return False
+    return hits >= need
+
+
+def _match_marker(marker: dict, ctx: GraphContext, region: Any = None) -> bool:
+    """蓝框整体标识匹配：每个独立遮罩块都要在搜索区域（红框）内命中，
+    且各块的相对位置与示教时对应。
+
+    结构：marker.templates = [{template, dx, dy}]（dx/dy=相对第一块的像素偏移）；
+    兼容旧结构 marker.template（单模板）。
+    """
+    thr = float(marker.get("threshold", 0.85))
+    templates = marker.get("templates") or []
+    if not templates:
+        tpl = marker.get("template", "")
+        if not tpl:
+            return False
+        return _match_template(ctx, tpl, thr, region=region) is not None
+    # 第一块：在搜索区域（红框）内定位
+    first = templates[0]
+    m0 = _match_template(ctx, first.get("template", ""), thr, region=region)
+    if m0 is None:
+        return False
+    x0, y0 = m0[0], m0[1]
+    # 其余块：在相对偏移位置附近核对（位置对应，容差=块尺寸的一半）
+    for t in templates[1:]:
+        tpl = _load_template(ctx, t.get("template", ""))
+        if tpl is None:
+            return False
+        th, tw = tpl.shape[0], tpl.shape[1]
+        dx, dy = int(t.get("dx", 0)), int(t.get("dy", 0))
+        cx = x0 + dx + tw // 2
+        cy = y0 + dy + th // 2
+        r = max(15, max(tw, th) // 2)
+        near = [cx - r, cy - r, 2 * r + tw, 2 * r + th]  # 绝对像素搜索区
+        if _match_template(ctx, t.get("template", ""), thr, region=near) is None:
+            return False
+    return True
 
 
 def _judge_one(judgement: dict, ctx: GraphContext) -> bool:
@@ -553,7 +673,7 @@ def _crop_region(screen: np.ndarray, region: dict, ctx: GraphContext) -> np.ndar
 
 
 def _load_template(ctx: GraphContext, rel_path: str) -> np.ndarray | None:
-    """从 assets 根加载模板图"""
+    """从 assets 根加载模板图（保留 alpha 通道，供不规则遮罩匹配）"""
     if not rel_path:
         return None
     base = Path(ctx.assets_dir) if ctx.assets_dir else Path(".")
@@ -564,33 +684,95 @@ def _load_template(ctx: GraphContext, rel_path: str) -> np.ndarray | None:
     if not p.exists():
         return None
     try:
-        img = cv2.imdecode(np.fromfile(str(p), dtype=np.uint8), cv2.IMREAD_COLOR)
+        img = cv2.imdecode(np.fromfile(str(p), dtype=np.uint8),
+                           cv2.IMREAD_UNCHANGED)
         return img
     except Exception:
         return None
 
 
+def _parse_region(region: Any, screen: np.ndarray) -> tuple | None:
+    """解析搜索区域（字符串 "x,y,w,h" 或列表）→ 绝对像素 (x, y, w, h)"""
+    if isinstance(region, str):
+        try:
+            parts = [float(v) for v in region.replace("，", ",").split(",")]
+            if len(parts) != 4:
+                return None
+            region = parts
+        except Exception:
+            return None
+    if not isinstance(region, (list, tuple)) or len(region) != 4:
+        return None
+    h, w = screen.shape[:2]
+    r = vs.region_to_abs(list(region), w, h)
+    if r is None:
+        return None
+    x, y, rw, rh = r
+    x = max(0, min(x, w - 1))
+    y = max(0, min(y, h - 1))
+    rw = max(1, min(rw, w - x))
+    rh = max(1, min(rh, h - y))
+    return (x, y, rw, rh)
+
+
 def _match_template(ctx: GraphContext, rel_path: str,
-                    threshold: float, index: int = 0) -> tuple | None:
-    """模板匹配：返回 (x, y, w, h) 或 None；index>0 时取第 N 个匹配（多实例）"""
+                    threshold: float, index: int = 0,
+                    region: Any = None) -> tuple | None:
+    """模板匹配：返回 (x, y, w, h) 或 None；index>0 取第 N 个匹配（多实例）。
+
+    region：搜索区域（相对 "x,y,w,h" 或列表），空=全屏；
+    模板若带 alpha 通道（示教遮罩产物），alpha 作为匹配 mask（不规则图标）。
+    """
     tpl = _load_template(ctx, rel_path)
     if tpl is None:
         return None
+    # RGBA 模板 → alpha 作为匹配 mask，BGR 作为模板
+    mask = None
+    if tpl.ndim == 3 and tpl.shape[2] == 4:
+        mask = tpl[:, :, 3]
+        tpl = tpl[:, :, :3]
     screen = ctx.screenshot()
     if screen is None:
         return None
     try:
-        screen_gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-        tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY)
-        th, tw = tpl_gray.shape[:2]
-        if th > screen_gray.shape[0] or tw > screen_gray.shape[1]:
+        # 搜索区域内匹配（坐标加回区域偏移）
+        offset_x = offset_y = 0
+        if region:
+            r = _parse_region(region, screen)
+            if r is None:
+                return None
+            rx, ry, rw, rh = r
+            screen = screen[ry:ry + rh, rx:rx + rw]
+            offset_x, offset_y = rx, ry
+        screen_gray = None
+        tpl_gray = None
+        th, tw = tpl.shape[0], tpl.shape[1]
+        if th > screen.shape[0] or tw > screen.shape[1]:
             return None
-        res = cv2.matchTemplate(screen_gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
+        if mask is not None:
+            # 遮罩模板：彩色匹配（保留颜色信息；灰度会丢失颜色，彩色图标无法区分）
+            res = cv2.matchTemplate(screen, tpl, cv2.TM_SQDIFF_NORMED, mask=mask)
+            res = 1.0 - res  # 越大越好
+        else:
+            # 无遮罩模板：灰度匹配（兼容旧素材）
+            screen_gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+            tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY)
+            # 低纹理模板（纯色块/低方差）用平方差匹配（归一化相关会除零→NaN）；
+            # 有纹理模板用归一化相关（对光照更鲁棒）。
+            low_texture = float(np.std(tpl_gray)) < 10.0
+            if low_texture:
+                res = cv2.matchTemplate(screen_gray, tpl_gray,
+                                        cv2.TM_SQDIFF_NORMED)
+                res = 1.0 - res
+            else:
+                res = cv2.matchTemplate(screen_gray, tpl_gray,
+                                        cv2.TM_CCOEFF_NORMED)
+        res = np.nan_to_num(res, nan=-1.0)
         if index <= 0:
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             if max_val >= threshold:
                 x, y = max_loc
-                return (x, y, tw, th)
+                return (x + offset_x, y + offset_y, tw, th)
             return None
         # 多实例：收集所有 >= threshold 的峰，按位置（先 y 后 x，从上到下从左到右）
         # 排序 + 非极大值抑制取第 index 个
@@ -606,7 +788,7 @@ def _match_template(ctx: GraphContext, rel_path: str,
                    for ox, oy in picked):
                 picked.append((px, py))
                 if len(picked) > index:
-                    return (px, py, tw, th)
+                    return (px + offset_x, py + offset_y, tw, th)
         return None
     except Exception:
         return None

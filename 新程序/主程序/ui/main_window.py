@@ -296,7 +296,7 @@ class MainWindow(QMainWindow):
             return
 
         cb = self.control_bar
-        cb.start_clicked.connect(lambda: self._safe_call(run_bridge.request_start))
+        cb.start_clicked.connect(self._on_start_request)
         cb.stop_clicked.connect(lambda: self._safe_call(run_bridge.request_stop))
         cb.pause_clicked.connect(lambda: self._safe_call(run_bridge.request_pause))
         cb.resume_clicked.connect(lambda: self._safe_call(run_bridge.request_resume))
@@ -311,6 +311,15 @@ class MainWindow(QMainWindow):
             fn()
         except Exception:
             pass
+
+    def _on_start_request(self) -> None:
+        """正式启动：可视化测试运行中时拒绝并提示（互斥）"""
+        try:
+            ok = self._param_bridge.run.request_start()
+        except Exception:
+            return
+        if ok is False:
+            self.status_bar.show_message("可视化测试运行中，无法启动脚本")
 
     # ── §5.2 refresh_task_list ─────────────────────────────
 

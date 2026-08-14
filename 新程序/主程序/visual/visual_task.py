@@ -34,6 +34,7 @@ class VisualTask(BaseTask):
     _screen_size: tuple = (1080, 1920)
     _display_name: str = ""
     _operation_store: Any = None   # OperationStore（4.26 通用操作）
+    _scene_store: Any = None       # SceneStore（识别素材库，跨任务复用）
 
     def __init__(self, task_id: str, **kwargs: Any):
         super().__init__(task_id, **kwargs)
@@ -103,6 +104,8 @@ class VisualTask(BaseTask):
             screen_size=screen_size,
             dry_run=bool(getattr(context, "dry_run", False) if context else False),
             get_operation=self._get_operation,
+            scene_loader=(self._scene_store.load
+                          if self._scene_store is not None else None),
             param_values=definition.get("param_values", {}) or {},
         )
 

@@ -319,7 +319,13 @@ class ApplicationBootstrap:
         # 17-可视化构建：注册可视化任务（games/{game}/visual_tasks/*.json）
         try:
             from visual import VisualTask, VisualTaskStore
+            from visual.scene_store import SceneStore
             vstore = VisualTaskStore(self._game.visual_tasks_dir)
+            scene_store = SceneStore([
+                self._game.scenes_dir,
+                self._game.shared_scenes_dir,
+            ])
+            self._store("scene_store", scene_store)
             for meta in vstore.list():
                 try:
                     defn = vstore.load(meta["name"])
@@ -331,6 +337,7 @@ class ApplicationBootstrap:
                     "_display_name": defn.get("display_name", "") or meta["name"],
                     "_definition": defn,
                     "_assets_dir": str(self._game.assets_dir),
+                    "_scene_store": scene_store,
                 })
                 registry.register(cls)
         except Exception:
@@ -442,6 +449,8 @@ class ApplicationBootstrap:
                 self._game.shared_operations_dir,
                 self._game.operations_dir,
             ])
+            # 识别素材库（L4 已创建，这里复用）
+            scene_store = self._get("scene_store")
             teach = TeachEngine(
                 event_bus=self._bus,
                 store=store,
@@ -450,6 +459,7 @@ class ApplicationBootstrap:
                 recognizer=self._get("recognizer"),
                 anti_detect=self._get("anti_detect"),
                 monitor=self._get("monitor"),
+                scene_store=scene_store,
             )
             vbridge = VisualBridge(
                 event_bus=self._bus,
@@ -459,11 +469,21 @@ class ApplicationBootstrap:
                 registry=self._get("task_registry"),
                 assets_dir=str(self._game.assets_dir),
                 operation_store=op_store,
+                scene_store=scene_store,
+                connection=self._get("connection"),
+                run_controller=self._get("run_controller"),
             )
             self._store("visual_store", store)
             self._store("operation_store", op_store)
+            self._store("scene_store", scene_store)
             self._store("teach_engine", teach)
             self._store("visual_bridge", vbridge)
+
+            # 互斥：把测试运行状态检查器注入 RunBridge（测试运行中禁止正式启动）
+            bridge = self._get("bridge")
+            if bridge is not None and hasattr(bridge, 'run') \
+                    and hasattr(bridge.run, 'set_teach_running_checker'):
+                bridge.run.set_teach_running_checker(lambda: teach.is_running)
         except Exception:
             pass  # 可视化构建为可选能力，初始化失败不阻断启动
 

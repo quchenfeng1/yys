@@ -20,7 +20,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Callable
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QListWidget,
                              QListWidgetItem, QPushButton, QSplitter, QTabWidget,
                              QVBoxLayout, QWidget)
@@ -217,6 +217,9 @@ def _apply_params(node, params: dict) -> None:
 class GraphCanvas(QWidget):
     """节点画布（编辑视图）"""
 
+    selection_changed = pyqtSignal()  # 选中节点变化（供父级更新示教按钮状态）
+    teach_node_requested = pyqtSignal(str, str)  # 右键菜单请求示教 (node_id, node_type)
+
     def __init__(self, element_provider: Callable[[], list[str]] | None = None,
                  operation_provider: Callable[[], list[str]] | None = None,
                  operation_loader: Callable[[str], dict | None] | None = None,
@@ -241,6 +244,12 @@ class GraphCanvas(QWidget):
         _patch_horizontal_node_widgets()
 
         self._graph = NodeGraph(viewer=PanNodeViewer())  # 左键拖空白平移
+        # 选中变化 → 转发给父级（更新示教按钮状态）
+        try:
+            self._graph.viewer().node_selection_changed.connect(
+                self._on_selection_changed)
+        except Exception:
+            pass
         self._node_classes: dict[str, type] = {}
         self._register_all()
 
@@ -248,23 +257,8 @@ class GraphCanvas(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
-        # 顶部：节点库添加
+        # 顶部：仅撤销 / 重做（添加节点用右侧节点库拖放；删除用右键菜单/Delete 键）
         toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("节点库:"))
-        self._type_combo = QComboBox()
-        for t, d in NODE_DEFS.items():
-            self._type_combo.addItem(f"[{d['category']}] {d['label']}", t)
-        self._type_combo.setMinimumWidth(180)
-        toolbar.addWidget(self._type_combo)
-        self._add_btn = QPushButton("＋ 添加节点")
-        self._add_btn.clicked.connect(self._on_add_node)
-        toolbar.addWidget(self._add_btn)
-        self._del_node_btn = QPushButton("🗑 删除选中节点")
-        self._del_node_btn.clicked.connect(self.delete_selected)
-        toolbar.addWidget(self._del_node_btn)
-        self._del_pipe_btn = QPushButton("✂ 删除选中连线")
-        self._del_pipe_btn.clicked.connect(self.delete_selected_pipes)
-        toolbar.addWidget(self._del_pipe_btn)
         self._undo_btn = QPushButton("↩ 撤销")
         self._undo_btn.clicked.connect(self._graph._undo_stack.undo)
         toolbar.addWidget(self._undo_btn)
@@ -272,14 +266,17 @@ class GraphCanvas(QWidget):
         self._redo_btn.clicked.connect(self._graph._undo_stack.redo)
         toolbar.addWidget(self._redo_btn)
         toolbar.addStretch(1)
-        self._refresh_btn = QPushButton("↻ 刷新下拉")
-        self._refresh_btn.clicked.connect(self.refresh_combos)
-        toolbar.addWidget(self._refresh_btn)
         lay.addLayout(toolbar)
 
         # NodeGraphQt 视图（键盘 Delete 删除选中）
         self._viewer = self._graph.widget
         self._viewer.installEventFilter(self)
+        # 右键菜单（删除节点/连线）：真正的 viewer 是 graph.viewer()（PanNodeViewer），
+        # 而非 graph.widget（NodeGraphWidget 容器）
+        try:
+            self._graph.viewer().node_context_action.connect(self._on_context_action)
+        except Exception:
+            pass
 
         # 右侧：节点库（基础节点 + 通用节点）
         # （属性面板 PropertiesBinWidget 已移除：它只显示底层 model 属性，
@@ -427,12 +424,6 @@ class GraphCanvas(QWidget):
         return sum(1 for _ in self._iter_connections(self._graph))
 
     # ── 节点操作 ──────────────────────────────────────────
-    def _on_add_node(self) -> None:
-        ntype = self._type_combo.currentData()
-        if not ntype:
-            return
-        self.add_node(ntype)
-
     def add_node(self, node_type: str, pos: list | None = None,
                  name: str = "") -> Any:
         """添加节点到画布（返回节点对象）"""
@@ -504,13 +495,80 @@ class GraphCanvas(QWidget):
             self.add_operation_node(name)
 
     # ── 删除 ──────────────────────────────────────────────
+    def _on_selection_changed(self, *args) -> None:
+        """NodeGraphQt 选中变化 → 转发给父级"""
+        self.selection_changed.emit()
+
     def selected_nodes(self) -> list:
         """当前选中的节点列表"""
         return self._graph.selected_nodes()
 
+    def set_node_scene(self, node_id: str, scene_id: str) -> bool:
+        """把识别素材 id 填到节点 scene 参数 + widget 下拉（示教回填用）"""
+        if not node_id or not scene_id:
+            return False
+        for node in self._graph.all_nodes():
+            if getattr(node, "id", "") != node_id:
+                continue
+            if not hasattr(node, "get_widget"):
+                return False
+            w = node.get_widget("scene")
+            if w is not None:
+                try:
+                    w.set_value(scene_id)
+                except Exception:
+                    pass
+            return True
+        return False
+
+    def set_node_element(self, node_id: str, template: str, region: str) -> bool:
+        """把识图模板路径 + 搜索区域回填到 matcher 节点 widget（示教回填用）"""
+        if not node_id or not template:
+            return False
+        for node in self._graph.all_nodes():
+            if getattr(node, "id", "") != node_id:
+                continue
+            if not hasattr(node, "get_widget"):
+                return False
+            w = node.get_widget("template")
+            if w is not None:
+                try:
+                    w.set_value(template)
+                except Exception:
+                    pass
+            if region:
+                w = node.get_widget("region")
+                if w is not None:
+                    try:
+                        w.set_value(region)
+                    except Exception:
+                        pass
+            return True
+        return False
+
+    def _on_context_action(self, action: str, item) -> None:
+        """右键菜单动作：示教 / 删除节点 / 删除连线"""
+        if action == "teach_node":
+            try:
+                ntype = item.type_.split(".")[-1] if hasattr(item, "type_") else ""
+                self.teach_node_requested.emit(item.id, ntype)
+            except Exception:
+                pass
+        elif action == "delete_node":
+            try:
+                node = self._graph.get_node_by_id(item.id)
+                if node is not None:
+                    self._graph.delete_node(node)
+            except Exception:
+                pass
+        elif action == "delete_pipe":
+            try:
+                item.delete()
+            except Exception:
+                pass
+
     def delete_selected(self) -> int:
         """删除选中的节点（及其连线）与选中的连线；返回删除节点数"""
-        # 先断开选中的连线（选中 pipe）
         self.delete_selected_pipes()
         nodes = self._graph.selected_nodes()
         if nodes:

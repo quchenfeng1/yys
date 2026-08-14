@@ -19,7 +19,8 @@ class VisualBridge:
 
     def __init__(self, event_bus=None, store=None, teach_engine=None,
                  game_profile=None, registry=None, assets_dir="",
-                 operation_store=None):
+                 operation_store=None, scene_store=None,
+                 connection=None, run_controller=None):
         self._bus = event_bus or get_global_bus()
         self._store = store
         self._teach = teach_engine
@@ -27,10 +28,33 @@ class VisualBridge:
         self._registry = registry
         self._assets_dir = Path(assets_dir) if assets_dir else Path(".")
         self._op_store = operation_store
+        self._scene_store = scene_store  # 识别素材库（SceneStore）
+        self._connection = connection
+        self._run_controller = run_controller
         # 游戏列表 + 当前游戏（顶部下拉）
         root = Path(self._profile.root) if self._profile else Path(".")
         self._games = scan_games(root)
         self._current_game = self._profile.game_id if self._profile else "yys"
+
+    # ── 运行环境状态 ────────────────────────────────────
+    def is_connected(self) -> bool:
+        """设备/模拟器是否已连接（测试启动前置条件）"""
+        if self._connection is not None and hasattr(self._connection, "is_connected"):
+            try:
+                return bool(self._connection.is_connected())
+            except Exception:
+                return False
+        return False
+
+    def is_script_running(self) -> bool:
+        """正式任务（脚本）是否正在运行（与测试启动互斥）"""
+        if self._run_controller is not None and \
+                hasattr(self._run_controller, "is_running"):
+            try:
+                return bool(self._run_controller.is_running)
+            except Exception:
+                return False
+        return False
 
     # ── 当前游戏 ────────────────────────────────────────
     def game_list(self) -> list[tuple[str, str]]:
@@ -135,8 +159,47 @@ class VisualBridge:
 
     # ── 下拉数据源（节点参数）────────────────────────────
     def scene_items(self) -> list[str]:
+        """场景下拉：识别素材库（跨任务复用）+ 当前任务已录场景（去重）"""
+        items: list[str] = []
+        seen: set[str] = set()
+        if self._scene_store is not None:
+            for s in self._scene_store.list():
+                sid = s.get("id", "")
+                if sid and sid not in seen:
+                    seen.add(sid)
+                    items.append(sid)
         task = self._teach._task if self._teach and self._teach._task else {}
-        return [s.get("id", "") for s in task.get("teach", {}).get("scenes", [])]
+        for s in task.get("teach", {}).get("scenes", []):
+            sid = s.get("id", "")
+            if sid and sid not in seen:
+                seen.add(sid)
+                items.append(sid)
+        return items
+
+    def capture_screen(self):
+        """截取一张当前画面（手动示教按钮用），返回 ndarray 或 None"""
+        teach = self._teach
+        if teach is None:
+            return None
+        ex = getattr(teach, "_executor", None)
+        if ex is not None and hasattr(ex, "_recognizer"):
+            try:
+                img = ex._recognizer._get_screenshot()
+                if img is not None:
+                    return img
+            except Exception:
+                pass
+        if ex is not None and hasattr(ex, "_connection"):
+            try:
+                return ex._connection.screenshot(use_cache=False)
+            except Exception:
+                return None
+        return None
+
+    def save_scene(self, scene: dict) -> None:
+        """保存识别素材到素材库（跨任务复用）"""
+        if self._scene_store is not None:
+            self._scene_store.save(scene)
 
     def point_items(self) -> list[str]:
         task = self._teach._task if self._teach and self._teach._task else {}

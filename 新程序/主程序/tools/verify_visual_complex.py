@@ -47,7 +47,7 @@ def test_nested_loop_branch_scene():
     sv_total = vs.new_node("set_var"); sv_total["params"] = {"var_name": "total", "var_value": "0"}
     loopA = vs.new_node("loop"); loopA["params"] = {"mode": "固定次数", "count": 3}
     sp = vs.new_node("scene_probe")
-    sp["params"] = {"scene": "login", "timeout": 0.2, "output_var": "hit"}
+    sp["params"] = {"scene": "login", "timeout": 1, "output_var": "hit"}
     br = vs.new_node("branch")
     br["params"] = {"data_source": "hit", "op": "==", "value": "1"}
     cnt_total = vs.new_node("counter"); cnt_total["params"] = {"var_name": "total", "delta": 1}

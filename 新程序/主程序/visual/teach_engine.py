@@ -32,7 +32,7 @@ class TeachEngine:
 
     def __init__(self, event_bus=None, store=None, assets_dir="",
                  executor=None, recognizer=None, anti_detect=None,
-                 monitor=None):
+                 monitor=None, scene_store=None):
         self._bus = event_bus or get_global_bus()
         self._store = store
         self._assets_dir = Path(assets_dir) if assets_dir else Path(".")
@@ -40,6 +40,7 @@ class TeachEngine:
         self._recognizer = recognizer
         self._anti_detect = anti_detect
         self._monitor = monitor
+        self._scene_store = scene_store  # 识别素材库（SceneStore）
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -119,6 +120,8 @@ class TeachEngine:
                 assets_dir=self._assets_dir,
                 stop_event=self._stop_event,
                 on_unknown=self._on_unknown,
+                scene_loader=(self._scene_store.load
+                              if self._scene_store is not None else None),
                 dry_run=False,
             )
             result = run_graph(self._task.get("graph", {}), gctx)
@@ -183,11 +186,30 @@ class TeachEngine:
 
         try:
             if action == "add_scene" and kw.get("scene"):
-                vs.add_scene(self._task, kw["scene"])
-                self._log(f"已记录场景: {kw['scene'].get('name', kw['scene'].get('id'))}")
+                scene = kw["scene"]
+                vs.add_scene(self._task, scene)  # 任务内副本（兼容旧行为）
+                # 保存到识别素材库（跨任务/跨节点复用）
+                if self._scene_store is not None:
+                    try:
+                        self._scene_store.save(scene)
+                    except Exception:
+                        pass
+                # 回填：若是「未设置的识图节点」触发的示教，把场景 id 写回该节点
+                info = pending.get("info") or {}
+                if info.get("type") == "scene_new" and info.get("node"):
+                    self._fill_node_scene(info["node"], scene.get("id", ""))
+                self._log(f"已记录场景: {scene.get('name', scene.get('id'))}")
             elif action == "add_point" and kw.get("point"):
                 vs.add_point(self._task, kw["point"])
                 self._log(f"已记录点击点: {kw['point'].get('label', kw['point'].get('id'))}")
+            elif action == "add_element" and kw.get("template"):
+                # 识图器示教：回填模板路径 + 搜索区域到目标节点
+                info = pending.get("info") or {}
+                if info.get("type") == "element_new" and info.get("node"):
+                    self._fill_node_element(info["node"],
+                                            kw.get("template", ""),
+                                            kw.get("region", ""))
+                self._log(f"已记录识图元素: {kw.get('template')}")
             elif action == "add_ocr_region" and kw.get("region"):
                 vs.add_ocr_region(self._task, kw["region"])
                 self._log(f"已记录OCR区域: {kw['region'].get('label', kw['region'].get('id'))}")
@@ -200,6 +222,26 @@ class TeachEngine:
         finally:
             # 解除阻断
             pending["event"].set()
+
+    def _fill_node_scene(self, node_id: str, scene_id: str) -> None:
+        """把识别素材 id 回填到画布上对应节点的 params.scene"""
+        if not node_id or not scene_id:
+            return
+        for nd in self._task.get("graph", {}).get("nodes", []):
+            if nd.get("id") == node_id:
+                nd.setdefault("params", {})["scene"] = scene_id
+                return
+
+    def _fill_node_element(self, node_id: str, template: str, region: str) -> None:
+        """把识图模板路径 + 搜索区域回填到画布上对应节点"""
+        if not node_id or not template:
+            return
+        for nd in self._task.get("graph", {}).get("nodes", []):
+            if nd.get("id") == node_id:
+                p = nd.setdefault("params", {})
+                p["template"] = template
+                p["region"] = region or p.get("region", "")
+                return
 
     # ── 工具 ──────────────────────────────────────────────
 

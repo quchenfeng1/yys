@@ -69,6 +69,16 @@ class GameProfile:
         return self.root / "games" / "_shared" / "operations"
 
     @property
+    def scenes_dir(self) -> Path:
+        """游戏内识别素材（识别素材库）：games/{game}/scenes/"""
+        return self.base / "scenes"
+
+    @property
+    def shared_scenes_dir(self) -> Path:
+        """跨游戏识别素材：games/_shared/scenes/"""
+        return self.root / "games" / "_shared" / "scenes"
+
+    @property
     def profile_yaml(self) -> Path:
         return self.base / "profile.yaml"
 

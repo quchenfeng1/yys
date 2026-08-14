@@ -19,12 +19,33 @@ class RunBridge:
         self._bus = event_bus or get_global_bus()
         # 兼容旧构造：直接传 RunController
         self._ctrl = kwargs.get('controller')
+        # 可视化测试运行状态检查器（互斥：测试运行中禁止正式启动）
+        self._teach_running = None
 
     # ── §5.3 发布事件 ────────────────────────────────────
 
-    def request_start(self) -> None:
-        """发布 start_requested 事件（§5.3）"""
+    def set_teach_running_checker(self, checker: Any) -> None:
+        """注入可视化测试运行状态检查器（bootstrap L6.5 调用）"""
+        self._teach_running = checker
+
+    def is_test_running(self) -> bool:
+        """可视化测试（示教/测试运行）是否正在进行"""
+        if self._teach_running is None:
+            return False
+        try:
+            return bool(self._teach_running())
+        except Exception:
+            return False
+
+    def request_start(self) -> bool:
+        """发布 start_requested 事件（§5.3）。
+
+        互斥：可视化测试运行中拒绝正式启动。返回是否已发起启动请求。
+        """
+        if self.is_test_running():
+            return False
         self._bus.publish(Events.START_REQUESTED, source="RunBridge")
+        return True
 
     def request_stop(self) -> None:
         """发布 stop_requested 事件（§5.3）"""

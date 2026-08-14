@@ -144,7 +144,7 @@ def test_scene_probe_output_var():
     graph = task["graph"]
     start = vs.find_node_by_type(graph, "start")
     sp = vs.new_node("scene_probe", name="识别登录")
-    sp["params"] = {"scene": "login", "timeout": 0.2, "output_var": "login"}
+    sp["params"] = {"scene": "login", "timeout": 1, "output_var": "login"}
     end = vs.new_node("end", name="结束")
     graph["nodes"] = [start, sp, end]
     graph["connections"] = [
@@ -178,7 +178,7 @@ def test_login_loop_random_click():
     loop = vs.new_node("loop", name="直到登录")
     loop["params"] = {"mode": "直到条件", "count": 60, "condition": "login == 1"}
     sp = vs.new_node("scene_probe", name="识别登录")
-    sp["params"] = {"scene": "login", "timeout": 0.2, "output_var": "login"}
+    sp["params"] = {"scene": "login", "timeout": 1, "output_var": "login"}
     cl = vs.new_node("clicker", name="随机点击")
     cl["params"] = {"mode": "随机点", "point": "", "offset": 0}
     end = vs.new_node("end", name="结束")
@@ -196,9 +196,9 @@ def test_login_loop_random_click():
 
     def fake_judge(scene, ctx):
         state["n"] += 1
-        # scene_probe 每次调用（timeout=0.2）内会判定 2 次；前 2 次调用都未命中
-        # （动画中，判定 1~4 次均 False → 点击 2 次），第 3 次调用命中登录界面
-        return state["n"] >= 5
+        # timeout=1（每次调用判定 1 次）：前 2 次调用未命中（动画中，点击 2 次），
+        # 第 3 次调用命中登录界面
+        return state["n"] >= 3
 
     vn._judge_scene = fake_judge
     ex = _FakeExecutor()

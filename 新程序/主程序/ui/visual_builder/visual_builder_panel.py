@@ -67,7 +67,8 @@ class VisualBuilderPanel(QWidget):
         toolbar.addWidget(self._open_btn)
         self._save_btn = QPushButton("💾 保存")
         self._save_btn.clicked.connect(self._save)
-        self._teach_btn = QPushButton("🎓 示教运行")
+        self._teach_btn = QPushButton("🧪 测试启动")
+        self._teach_btn.setToolTip("在模拟器上单独试跑当前任务（与正式脚本互斥）")
         self._teach_btn.clicked.connect(self._teach_run)
         self._stop_btn = QPushButton("⏹ 停止")
         self._stop_btn.clicked.connect(self._stop)
@@ -98,8 +99,8 @@ class VisualBuilderPanel(QWidget):
                 element_provider=self._bridge.element_items,
                 operation_provider=self._bridge.operation_items,
                 operation_loader=self._bridge.load_operation,
-                # 示教产物下拉：按当前打开项实时拉取（任务或操作）
-                scene_provider=lambda: self._teach_items("scenes"),
+                # 场景下拉：识别素材库（跨任务复用）+ 当前任务已录场景
+                scene_provider=self._bridge.scene_items,
                 point_provider=lambda: self._teach_items("points"),
                 ocr_provider=lambda: self._teach_items("ocr_regions"),
                 # 通用节点：右侧「通用节点」Tab（所选游戏的通用操作）
@@ -115,11 +116,17 @@ class VisualBuilderPanel(QWidget):
                 store=self._bridge._store,
                 assets_dir=self._bridge._assets_dir,
                 ocr=self._bridge.get_ocr(),
+                scene_commit_callback=self._on_scene_committed,
+                element_commit_callback=self._on_element_committed,
             )
         else:
             self._teach_console = TeachConsole(event_bus=self._bus)
         right.addTab(self._teach_console, "画面示教")
+        self._right_tabs = right
         root.addWidget(right, 1)
+
+        # 右键菜单「示教」请求
+        self._canvas.teach_node_requested.connect(self._on_teach_node_requested)
 
         self._refresh_open_label()
 
@@ -146,6 +153,36 @@ class VisualBuilderPanel(QWidget):
             return []
         teach = data.get("teach", {}) or {}
         return [x.get("id", "") for x in teach.get(key, [])]
+
+    def _on_teach_node_requested(self, node_id: str, node_type: str) -> None:
+        """右键菜单「示教」请求：截一张图录入识别特征"""
+        if self._bridge is None:
+            return
+        self._start_teach(node_id, node_type)
+
+    def _start_teach(self, node_id: str, node_type: str) -> None:
+        """截一张图 → 进入示教页（画面示教 Tab），目标节点 node_id"""
+        img = self._bridge.capture_screen()
+        if node_type == "matcher":
+            self._teach_console.start_element_teach(img, node_id)
+        else:
+            self._teach_console.start_manual_teach(img, node_id)
+        self._right_tabs.setCurrentWidget(self._teach_console)
+
+    def _on_scene_committed(self, scene: dict, node_id: str) -> None:
+        """手动示教提交：保存识别素材库 + 回填画布节点 + 刷新下拉"""
+        if self._bridge is not None:
+            self._bridge.save_scene(scene)
+        if node_id:
+            self._canvas.refresh_combos()
+            self._canvas.set_node_scene(node_id, scene.get("id", ""))
+        self._canvas.refresh_combos()
+
+    def _on_element_committed(self, template: str, region: str, node_id: str) -> None:
+        """识图元素示教提交：模板已存 assets → 回填 matcher 节点 + 刷新下拉"""
+        self._canvas.refresh_combos()
+        if node_id:
+            self._canvas.set_node_element(node_id, template, region or "")
 
     def _refresh_open_label(self) -> None:
         if self._open_key is None:
@@ -257,20 +294,28 @@ class VisualBuilderPanel(QWidget):
         if self._bridge is None or self._open_key is None:
             QMessageBox.information(self, "提示", "请先打开任务")
             return
+        # 测试启动前置条件：模拟器已连接
+        if not self._bridge.is_connected():
+            QMessageBox.warning(self, "测试启动", "请先连接模拟器再测试启动")
+            return
+        # 互斥：正式脚本运行中禁止测试启动
+        if self._bridge.is_script_running():
+            QMessageBox.warning(self, "测试启动", "脚本正在运行，请先停止脚本")
+            return
         # 示教运行仅支持当前游戏的可视化任务（teach_engine 从当前游戏 store 加载）
         cur_game = self._bridge._profile.game_id if self._bridge._profile else "yys"
         if self._open_key["kind"] != "task" or \
                 self._open_key["game"] != cur_game:
             QMessageBox.information(
                 self, "提示",
-                "示教运行目前仅支持当前游戏的可视化任务；\n"
+                "测试启动目前仅支持当前游戏的可视化任务；\n"
                 "通用操作或其它游戏请先保存，再通过调度/任务队列运行")
             return
         self._save()
         name = self._current_name()
         ok = self._bridge.teach_run(name)
         if not ok:
-            QMessageBox.warning(self, "示教", "示教已在运行或任务加载失败")
+            QMessageBox.warning(self, "测试启动", "测试已在运行或任务加载失败")
             return
         self._stop_btn.setEnabled(True)
         self._teach_btn.setEnabled(False)
