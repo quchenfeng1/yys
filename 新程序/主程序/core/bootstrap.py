@@ -379,6 +379,13 @@ class ApplicationBootstrap:
         )
         self._store("account_manager", am)
 
+        # 回注入桥接：L4 创建 bridge 时 account_manager 尚未初始化，
+        # 这里把真实实例注入 AccountBridge，否则账号 UI 功能空转
+        bridge = self._get("bridge")
+        if bridge is not None and hasattr(bridge, 'account') \
+                and hasattr(bridge.account, 'set_manager'):
+            bridge.account.set_manager(am)
+
     # ── 第6层：运行控制 ───────────────────────────────────
 
     def _init_run_controller(self) -> None:

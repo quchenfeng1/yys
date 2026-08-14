@@ -114,11 +114,8 @@ class ADBClient:
         """连接到设备"""
         if serial:
             self._serial = serial
-        try:
-            self.shell("echo ok", timeout=5.0)
-            return True
-        except Exception:
-            return False
+        # echo() 内部带 timeout=5s 与异常兜底，返回连通性 bool
+        return self.echo()
 
     def disconnect(self) -> None:
         """断开连接"""

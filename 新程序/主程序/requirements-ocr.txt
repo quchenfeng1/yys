@@ -1,0 +1,8 @@
+# OCR 引擎依赖（可选）——用于可视化「OCR读取」节点与场景「ocr_contains」判定
+# 二选一安装（paddleocr 推荐，中文识别效果好）：
+#
+#   .venv/bin/pip install paddleocr
+#   .venv/bin/pip install easyocr
+#
+# 安装后重启程序即可生效（OcrLocator 懒加载，无需改代码）。
+paddleocr>=2.7

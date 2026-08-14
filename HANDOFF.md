@@ -64,7 +64,13 @@ QT_QPA_PLATFORM=offscreen QT_PLUGIN_PATH="$PWD/.venv/lib/python3.9/site-packages
 - ✅ 动画跳过模式：scene_probe 加 output_var（命中写1/未命中写0）、clicker 加 mode（固定点/随机点）
 - ✅ **嵌套循环 bug 修复**（graph_runner）：链式回跳 while、进入 loop 重置计数、
     _eval_until 右值支持变量引用
-- ✅ 回归 **57/57 通过**（tools/run_regression.py --fast）
+- ✅ **识图缺口补全**（2026-08-14）：clicker「识别坐标」点 matcher 输出（识图→点击闭环）、
+    edge_line 边缘检测、color_block 区域占比、matcher 多实例（index 参数）、
+    scroll_capture 拼接全景 panorama.png、navigator 实际动作（BACK×N/重启游戏）
+- ✅ **多分辨率适配已完备并验证**：示教坐标全部相对(0~1)存储，VisualTask.execute 从实际截图
+    动态推断 screen_size；verify_visual_multires.py 覆盖换算
+- ✅ **OCR case_sensitive 修复**（ocr_locator find_text/find_texts）
+- ✅ 回归 **58/58 通过**（tools/run_regression.py --fast）
 
 ---
 
@@ -80,8 +86,9 @@ QT_QPA_PLATFORM=offscreen QT_PLUGIN_PATH="$PWD/.venv/lib/python3.9/site-packages
 
 ### 3.2 后续可做（未要求）
 - Operation 编辑器 UI（操作子图单独编辑界面）
-- P3：滚动拼接 Stitcher、导出 .py、多分辨率
-- OCR 引擎安装（PaddleOCR 懒加载降级，装上即生效）
+- 导出 .py（可视化任务导出为脚本）
+- OCR 引擎安装：`.venv/bin/pip install paddleocr`（依赖清单见 requirements-ocr.txt，
+  懒加载装上即生效，无需改代码）
 
 ---
 

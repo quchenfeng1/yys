@@ -150,6 +150,24 @@ def _exec_clicker(node: dict, ctx: GraphContext) -> NodeResult:
             ctx.executor.click_position(x, y)
             _log(ctx, f"随机点击 @ ({x},{y})")
         return NodeResult(data={"point": (x, y)})
+    # 识别坐标：点击上游识图器(matcher)输出的元素中心 + 随机偏移
+    if mode == "识别坐标":
+        try:
+            cx = int(float(ctx.get_var("x", 0))) + int(float(ctx.get_var("w", 0))) // 2
+            cy = int(float(ctx.get_var("y", 0))) + int(float(ctx.get_var("h", 0))) // 2
+        except Exception:
+            return NodeResult(status="error", message="识别坐标无效（上游识图器未命中）")
+        off = int(float(params.get("offset", 0) or 0))
+        if off:
+            import random
+            cx += random.randint(-off, off)
+            cy += random.randint(-off, off)
+        if ctx.dry_run:
+            _log(ctx, f"[dry] 点击识别坐标 @ ({cx},{cy})")
+        else:
+            ctx.executor.click_position(cx, cy)
+            _log(ctx, f"点击识别坐标 @ ({cx},{cy})")
+        return NodeResult(data={"point": (cx, cy)})
     # 固定点：示教点坐标
     point_id = params.get("point", "")
     point = ctx.get_point(point_id)
@@ -259,6 +277,7 @@ def _exec_scene_probe(node: dict, ctx: GraphContext) -> NodeResult:
 def _exec_matcher(node: dict, ctx: GraphContext) -> NodeResult:
     params = node.get("params", {})
     template = params.get("template", "")
+    index = int(params.get("index", 0) or 0)
     threshold = float(params.get("threshold", 0.85))
     timeout = float(params.get("timeout", 3))
     if not template:
@@ -267,7 +286,7 @@ def _exec_matcher(node: dict, ctx: GraphContext) -> NodeResult:
     while True:
         if ctx.stopped():
             return NodeResult(status="interrupted")
-        match = _match_template(ctx, template, threshold)
+        match = _match_template(ctx, template, threshold, index=index)
         if match is not None:
             _log(ctx, f"识别命中: {template}")
             return NodeResult(data={
@@ -295,7 +314,8 @@ def _exec_ocr_reader(node: dict, ctx: GraphContext) -> NodeResult:
     if region is None:
         return NodeResult(status="error", message=f"OCR区域不存在: {region_id}")
     if ctx.ocr is None or not getattr(ctx.ocr, "is_ready", False):
-        return NodeResult(status="error", message="OCR 引擎不可用")
+        return NodeResult(status="error",
+                          message="OCR 引擎不可用：请安装 paddleocr（pip install paddleocr）后重启程序")
     screen = ctx.screenshot()
     crop = _crop_region(screen, region, ctx)
     try:
@@ -316,8 +336,8 @@ def _exec_branch(node: dict, ctx: GraphContext) -> NodeResult:
     data_source = params.get("data_source", "")
     op = params.get("op", ">=")
     value = params.get("value", "0")
-    if data_source in ("存在", "不存在"):
-        # 场景/元素存在性：data_source 字段存目标
+    if op in ("存在", "不存在"):
+        # 场景/元素存在性：condition 字段存目标（模板名）
         target = params.get("condition", "")
         if op == "存在":
             hit = _match_template(ctx, target, 0.85) is not None
@@ -381,23 +401,75 @@ def _exec_refresher(node: dict, ctx: GraphContext) -> NodeResult:
 def _exec_navigator(node: dict, ctx: GraphContext) -> NodeResult:
     params = node.get("params", {})
     action = params.get("action", "返回主界面")
+    package = params.get("package", "")
     _log(ctx, f"导航: {action}")
-    # 简化实现：返主/关弹窗依赖示教点（预留）；先记录日志
+    if action == "关闭弹窗":
+        _press_key(ctx, "back", 1)
+    elif action == "返回主界面":
+        _press_key(ctx, "back", 3)
+    elif action == "重启游戏":
+        if not package:
+            return NodeResult(status="error", message="重启游戏需填写游戏包名")
+        if ctx.dry_run:
+            _log(ctx, f"[dry] 重启游戏 {package}")
+        elif ctx.executor is not None and hasattr(ctx.executor, "restart_app"):
+            if not ctx.executor.restart_app(package):
+                return NodeResult(status="error", message=f"重启游戏失败: {package}")
+        else:
+            return NodeResult(status="error", message="执行器不支持重启游戏")
     return NodeResult()
+
+
+def _press_key(ctx: GraphContext, key: str, times: int) -> None:
+    """模拟按键若干次（每次间隔 0.5s），dry_run 下仅记日志"""
+    ex = ctx.executor
+    for _ in range(times):
+        if ctx.stopped():
+            return
+        if ctx.dry_run:
+            _log(ctx, f"[dry] 按键 {key}")
+        elif ex is not None and hasattr(ex, "press_key"):
+            ex.press_key(key)
+        ctx.sleep(0.5)
 
 
 def _exec_scroll_capture(node: dict, ctx: GraphContext) -> NodeResult:
     params = node.get("params", {})
     direction = params.get("direction", "up")
     steps = int(params.get("steps", 3))
-    _log(ctx, f"滚动捕获 {direction} × {steps}（全景拼接 P3）")
-    for _ in range(steps):
+    _log(ctx, f"滚动捕获 {direction} × {steps}")
+    frames: list = []
+    for i in range(steps):
         if ctx.stopped():
             return NodeResult(status="interrupted")
-        _exec_dragger({"params": {"direction": direction, "distance": 0.7,
-                                  "duration_ms": 600}}, ctx)
-        ctx.sleep(0.4)
-    return NodeResult()
+        try:
+            img = ctx.screenshot()
+            if img is not None:
+                frames.append(img)
+        except Exception:
+            pass
+        if i < steps - 1:
+            _exec_dragger({"params": {"direction": direction, "distance": 0.7,
+                                      "duration_ms": 600}}, ctx)
+            ctx.sleep(0.4)
+    if not frames:
+        return NodeResult(status="error", message="滚动捕获未能截取任何画面")
+    # 拼接全景（纵向滚动纵向拼接 / 横向滚动横向拼接）
+    if direction in ("up", "down"):
+        pano = np.concatenate(frames, axis=0)
+    else:
+        pano = np.concatenate(frames, axis=1)
+    # 保存全景到素材目录，供后续标注/识别
+    out_dir = Path(ctx.assets_dir) if ctx.assets_dir else Path(".")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "panorama.png"
+    try:
+        cv2.imwrite(str(out_path), pano)
+    except Exception as e:
+        return NodeResult(status="error", message=f"全景保存失败: {e}")
+    _log(ctx, f"全景已保存: {out_path} ({pano.shape[1]}x{pano.shape[0]})")
+    return NodeResult(data={"panorama": str(out_path), "width": int(pano.shape[1]),
+                            "height": int(pano.shape[0])})
 
 
 def _exec_operation(node: dict, ctx: GraphContext) -> NodeResult:
@@ -499,8 +571,8 @@ def _load_template(ctx: GraphContext, rel_path: str) -> np.ndarray | None:
 
 
 def _match_template(ctx: GraphContext, rel_path: str,
-                    threshold: float) -> tuple | None:
-    """模板匹配：返回 (x, y, w, h) 或 None"""
+                    threshold: float, index: int = 0) -> tuple | None:
+    """模板匹配：返回 (x, y, w, h) 或 None；index>0 时取第 N 个匹配（多实例）"""
     tpl = _load_template(ctx, rel_path)
     if tpl is None:
         return None
@@ -514,13 +586,30 @@ def _match_template(ctx: GraphContext, rel_path: str,
         if th > screen_gray.shape[0] or tw > screen_gray.shape[1]:
             return None
         res = cv2.matchTemplate(screen_gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val >= threshold:
-            x, y = max_loc
-            return (x, y, tw, th)
+        if index <= 0:
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val >= threshold:
+                x, y = max_loc
+                return (x, y, tw, th)
+            return None
+        # 多实例：收集所有 >= threshold 的峰，按位置（先 y 后 x，从上到下从左到右）
+        # 排序 + 非极大值抑制取第 index 个
+        ys, xs = np.where(res >= threshold)
+        if len(xs) == 0:
+            return None
+        order = sorted(range(len(xs)), key=lambda i: (int(ys[i]), int(xs[i])))
+        picked: list[tuple[int, int]] = []
+        for i in order:
+            px, py = int(xs[i]), int(ys[i])
+            # 标准 NMS：与所有已选实例均不重叠（|dx|>=tw 或 |dy|>=th）才保留
+            if all(abs(px - ox) >= tw or abs(py - oy) >= th
+                   for ox, oy in picked):
+                picked.append((px, py))
+                if len(picked) > index:
+                    return (px, py, tw, th)
+        return None
     except Exception:
         return None
-    return None
 
 
 def _judge_template(j: dict, ctx: GraphContext) -> bool:
@@ -548,6 +637,7 @@ def _judge_template(j: dict, ctx: GraphContext) -> bool:
 
 def _judge_ocr(j: dict, ctx: GraphContext) -> bool:
     if ctx.ocr is None or not getattr(ctx.ocr, "is_ready", False):
+        _log(ctx, "OCR 未就绪，ocr_contains 判定跳过（pip install paddleocr）")
         return False
     screen = ctx.screenshot()
     crop = _crop_region(screen, j, ctx)
@@ -572,17 +662,37 @@ def _judge_color(j: dict, ctx: GraphContext) -> bool:
         tr, tg, tb = int(target[0:2], 16), int(target[2:4], 16), int(target[4:6], 16)
     else:
         return False
+    tol = int(j.get("tol", 40))
     h, w = crop.shape[:2]
     if h == 0 or w == 0:
         return False
+    # 若指定 ratio：统计区域内与目标色接近的像素占比 >= ratio（主色占比模式）
+    if j.get("ratio") is not None:
+        b = crop[:, :, 0].astype(int)
+        g = crop[:, :, 1].astype(int)
+        r = crop[:, :, 2].astype(int)
+        mask = (abs(r - tr) <= tol) & (abs(g - tg) <= tol) & (abs(b - tb) <= tol)
+        return float(mask.mean()) >= float(j.get("ratio", 0.5))
+    # 默认：中心点近似（兼容旧行为）
     b, g, r = crop[h // 2, w // 2]
-    # 主色近似（允许 40 容差）
-    return abs(int(r) - tr) <= 40 and abs(int(g) - tg) <= 40 and abs(int(b) - tb) <= 40
+    return abs(int(r) - tr) <= tol and abs(int(g) - tg) <= tol and abs(int(b) - tb) <= tol
 
 
 def _judge_edge(j: dict, ctx: GraphContext) -> bool:
-    # 预留：边缘线检测（P3）
-    return False
+    """边缘线检测：区域内 Canny 边缘像素占比 >= threshold"""
+    screen = ctx.screenshot()
+    if screen is None:
+        return False
+    crop = _crop_region(screen, j, ctx)
+    if crop.size == 0:
+        return False
+    try:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+        ratio = float(edges.mean()) / 255.0
+        return ratio >= float(j.get("threshold", 0.02))
+    except Exception:
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════

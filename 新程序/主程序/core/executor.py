@@ -328,6 +328,30 @@ class Executor:
             elif self._connection and hasattr(self._connection, 'swipe'):
                 self._connection.swipe(px, py, nx, ny, segment_duration)
 
+    def press_key(self, key: str) -> None:
+        """模拟按键（back/home/menu/enter）。dry_run 下仅跳过不执行。"""
+        if self._dry_run_event.is_set():
+            return
+        if self._connection and hasattr(self._connection, 'input_key'):
+            self._connection.input_key(key)
+
+    def restart_app(self, package: str) -> bool:
+        """重启游戏：am force-stop 后通过 monkey 拉起（无需 activity）。"""
+        if self._dry_run_event.is_set():
+            return True
+        if not self._connection:
+            return False
+        adb = getattr(self._connection, '_adb', None)
+        if adb is None or not hasattr(adb, 'run'):
+            return False
+        try:
+            adb.run(["shell", "am", "force-stop", package], timeout=5.0)
+            adb.run(["shell", "monkey", "-p", package,
+                     "-c", "android.intent.category.LAUNCHER", "1"], timeout=10.0)
+            return True
+        except Exception:
+            return False
+
     # ── §5.3 场景检测 ─────────────────────────────────────
 
     def detect_scene(self, candidates: list[str], timeout: float | None = None) -> str | None:

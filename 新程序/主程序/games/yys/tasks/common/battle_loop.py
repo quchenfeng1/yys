@@ -43,8 +43,8 @@ class BattleLoop(TaskStep):
                 except (TypeError, ValueError):
                     completed = 0
 
-        # 剩余场次（max_battles<=0 → 无限循环）
-        remaining = (max_battles - completed) if max_battles > 0 else -1
+        # 剩余场次（max_battles<=0 → 无限循环；已完成>=目标时钳制为 0，避免负数死循环）
+        remaining = max(0, max_battles - completed) if max_battles > 0 else -1
 
         while remaining < 0 or remaining > 0:
             if self.check_interrupt(context):

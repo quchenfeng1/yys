@@ -17,6 +17,10 @@ class AccountBridge:
     def __init__(self, account_mgr: AccountManager | None):
         self._mgr = account_mgr
 
+    def set_manager(self, account_mgr: AccountManager | None) -> None:
+        """运行后注入/更新 AccountManager（bootstrap L5 初始化后回注入）"""
+        self._mgr = account_mgr
+
     # ── §5.3 方法 ────────────────────────────────────────
 
     def switch_to(self, account_id: str) -> bool:

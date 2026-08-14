@@ -66,12 +66,14 @@ NODE_DEFS: dict[str, dict] = {
         "params": [
             {"name": "template", "label": "目标元素", "widget": "combo_element",
              "default": ""},
+            {"name": "index", "label": "第几个(0=首个)", "widget": "spinbox",
+             "default": 0, "min": 0, "max": 20},
             {"name": "threshold", "label": "阈值", "widget": "spinbox",
              "default": 0.85, "min": 0.0, "max": 1.0, "step": 0.01},
             {"name": "timeout", "label": "超时(秒)", "widget": "spinbox",
              "default": 3, "min": 0, "max": 60},
         ],
-        "description": "识别某元素；命中走 out（输出坐标），未命中走 miss",
+        "description": "识别某元素；命中走 out（输出坐标），未命中走 miss；index 选第 N 个同名匹配",
     },
     "ocr_reader": {
         "type": "ocr_reader", "label": "OCR读取", "category": "感知",
@@ -104,12 +106,12 @@ NODE_DEFS: dict[str, dict] = {
         "outputs": [_ctrl("out")],
         "params": [
             {"name": "mode", "label": "点击方式", "widget": "combo",
-             "options": ["固定点", "随机点"], "default": "固定点"},
+             "options": ["固定点", "随机点", "识别坐标"], "default": "固定点"},
             {"name": "point", "label": "点击目标", "widget": "combo_point", "default": ""},
             {"name": "offset", "label": "偏移(px)", "widget": "spinbox", "default": 10,
              "min": 0, "max": 100},
         ],
-        "description": "固定点：在示教点击点位置点击；随机点：屏幕内随机点击（跳过动画用）",
+        "description": "固定点：点示教点；随机点：屏幕随机；识别坐标：点击上游识图器输出的坐标中心",
     },
     "dragger": {
         "type": "dragger", "label": "拖拽器", "category": "操作",
@@ -151,8 +153,9 @@ NODE_DEFS: dict[str, dict] = {
         "params": [
             {"name": "action", "label": "动作", "widget": "combo",
              "options": ["返回主界面", "关闭弹窗", "重启游戏"], "default": "返回主界面"},
+            {"name": "package", "label": "游戏包名", "widget": "text", "default": ""},
         ],
-        "description": "通用导航动作",
+        "description": "通用导航动作；重启游戏需填游戏包名",
     },
     "set_var": {
         "type": "set_var", "label": "变量设置", "category": "操作",

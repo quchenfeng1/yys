@@ -337,12 +337,14 @@ class OcrLocator:
         keyword: str,
         case_sensitive: bool = False,
     ) -> list[OCRResult]:
-        """在 OCR 结果中搜索关键词（Levenshtein 模糊匹配）"""
+        """在 OCR 结果中搜索关键词（模糊匹配；case_sensitive 时精确子串匹配）"""
         results = self.recognize(image)
         matches = []
         for r in results:
-            text = r.text if case_sensitive else r.text
-            if self._fuzzy_match(text, keyword):
+            if case_sensitive:
+                if keyword in r.text:
+                    matches.append(r)
+            elif self._fuzzy_match(r.text, keyword):
                 matches.append(r)
         return matches
 
@@ -357,8 +359,11 @@ class OcrLocator:
         matches: dict[str, list[OCRResult]] = {k: [] for k in keywords}
         for r in results:
             for kw in keywords:
-                text = r.text if case_sensitive else r.text
-                if self._fuzzy_match(text, kw):
+                if case_sensitive:
+                    hit = kw in r.text
+                else:
+                    hit = self._fuzzy_match(r.text, kw)
+                if hit:
                     matches[kw].append(r)
         return matches
 

@@ -569,6 +569,6 @@ class AccountManager:
 
     def get_current_account(self) -> AccountInfo | None:
         """获取当前账号"""
-        if not self._current:
+        if not self._current_id:
             return None
-        return self.get_account(self._current)
+        return self.get_account(self._current_id)
