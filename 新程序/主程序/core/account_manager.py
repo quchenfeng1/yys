@@ -9,7 +9,6 @@ AccountManager 账号配置与生命周期管理（§5.1 单文件）。
 - 账号切换（含设备切换、状态更新、事件通知）
 - 角色区分与任务范围过滤
 - Cookie 持久化
-- 组队协调（teaming_partners / prepare_teaming / coordinate_action）
 """
 from __future__ import annotations
 
@@ -47,7 +46,7 @@ class AccountInfo:
 
 
 class TeamAction:
-    """组队协调动作枚举（§5.2）"""
+    """组队协调动作枚举（§5.2，2026-08-16 组队协调链路已退役，保留兼容）"""
     ACCEPT_INVITE = "accept_invite"   # 接受组队邀请
     APPLY_TEAM = "apply_team"         # 申请入队
     LEAVE_TEAM = "leave_team"         # 离开队伍
@@ -314,97 +313,6 @@ class AccountManager:
                 return False  # 最后一个 sub
 
         return False
-
-    # ═══════════════════════════════════════════════════════════
-    #  §3.4 组队协调
-    # ═══════════════════════════════════════════════════════════
-
-    def get_teaming_partners(self, group: str) -> list[AccountInfo]:
-        """
-        获取指定分组中可用的组队小号列表（§3.4 + §5.3）。
-
-        筛选条件：同 group + teaming_enabled=True + 已启用。
-        """
-        result = []
-        for info in self._accounts.values():
-            if info.role != "sub":
-                continue
-            if not info.enabled or not info.teaming_enabled:
-                continue
-            if group and info.team_group and info.team_group != group:
-                continue
-            result.append(info)
-        return result
-
-    def prepare_teaming(self, task_name: str) -> dict[str, bool]:
-        """
-        为指定任务准备组队（§3.4 + §5.3）。
-
-        依次唤醒小号、完成前置操作。
-        返回 {account_id: 是否就绪} 字典。
-        """
-        results: dict[str, bool] = {}
-        old_id = self._current_id
-
-        for partner in self.get_teaming_partners(""):
-            try:
-                ok = self.switch_to(partner.account_id)
-                results[partner.account_id] = ok
-                # 更新 sub_account_status
-                if self._state_mgr and ok:
-                    status_map = self._state_mgr.get_state("sub_account_status", {})
-                    from core.run_state import SubStatus
-                    status_map[partner.account_id] = SubStatus(
-                        account_id=partner.account_id,
-                        status="teaming",
-                        task=f"准备组队: {task_name}",
-                    )
-                    self._state_mgr.set_state("sub_account_status", status_map)
-            except Exception:
-                results[partner.account_id] = False
-
-        # 切回原账号
-        if old_id:
-            self.switch_to(old_id)
-
-        # 发布事件
-        self._bus.publish(Events.TEAMING_PREPARED, source="account_manager",
-                         task_name=task_name, results=results)
-        return results
-
-    def coordinate_action(self, account_id: str, action: str, params: dict | None = None) -> bool:
-        """
-        在指定账号上执行协调操作（§3.4 + §5.3）。
-
-        切换账号 → 更新 sub_account_status → 发布 coordinate_action 事件。
-        09-运行控制中心 订阅后通过 Executor 执行实际识图/点击。
-        """
-        try:
-            old = self._current_id
-            ok = self.switch_to(account_id)
-            if not ok:
-                return False
-
-            # 更新状态
-            if self._state_mgr:
-                status_map = self._state_mgr.get_state("sub_account_status", {})
-                from core.run_state import SubStatus
-                status_map[account_id] = SubStatus(
-                    account_id=account_id,
-                    status="teaming",
-                    task=f"执行: {action}",
-                )
-                self._state_mgr.set_state("sub_account_status", status_map)
-
-            # 发布事件
-            self._bus.publish(Events.COORDINATE_ACTION, source="account_manager",
-                             account_id=account_id, action=action, params=params or {})
-
-            if old:
-                self.switch_to(old)
-            return True
-        except Exception:
-            return False
 
     # ═══════════════════════════════════════════════════════════
     #  登录状态 + Cookie

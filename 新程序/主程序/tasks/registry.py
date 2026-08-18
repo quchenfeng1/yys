@@ -128,6 +128,21 @@ class TaskRegistry:
             raise KeyError(f"任务未注册: {name}")
         return cls(task_id=name)
 
+    def unregister(self, name: str) -> bool:
+        """注销任务（2026-08-16：可视化任务删除时清理注册表，避免列表残留）。"""
+        existed = name in self._registry
+        self._registry.pop(name, None)
+        for ids in self._categories.values():
+            if name in ids:
+                ids.remove(name)
+        return existed
+
+    def reset(self) -> None:
+        """清空注册表（2026-08-16：游戏切换 → 重新扫描新游戏任务包）。"""
+        self._registry.clear()
+        self._categories.clear()
+        self._scanned = False
+
     def get_all(self) -> list[BaseTask]:
         """获取所有任务实例"""
         return [self.get(tid) for tid in self._registry]

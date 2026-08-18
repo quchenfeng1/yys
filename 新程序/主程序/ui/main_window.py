@@ -24,11 +24,12 @@ from core.event_bus import EventBus, get_global_bus
 from core.events import Events
 from ui.panels.settings_panel import SettingsPanel
 from ui.panels.control_bar import ControlBar
-from ui.panels.execution_history import ExecutionHistoryPanel
+from ui.panels.anomaly_tasks_panel import AnomalyTasksPanel
+from ui.panels.emulator_manager_panel import EmulatorManagerPanel
 from ui.panels.game_task_panel import GameTaskPanel
-from ui.panels.image_manager_panel import ImageManagerPanel
 from ui.panels.log_panel import LogPanel
 from ui.panels.menu_tree import MenuTree
+from ui.panels.signal_manager_panel import SignalManagerPanel
 from ui.panels.status_bar import StatusBar
 from ui.panels.sub_account_panel import SubAccountPanel
 from ui.panels.task_manager_panel import TaskManagerPanel
@@ -198,13 +199,18 @@ class MainWindow(QMainWindow):
     def _create_panels(self) -> None:
         """创建全部 12 个面板（§5.1）"""
         panels = [
-            ("game_task", "游戏任务", GameTaskPanel(param_bridge=self._param_bridge)),
+            ("game_task", "游戏任务", GameTaskPanel(param_bridge=self._param_bridge,
+                                                     visual_bridge=self._visual_bridge)),
             ("task_queue", "任务队列", TaskQueuePanel()),
-            ("task_manager", "任务管理", TaskManagerPanel(param_bridge=self._param_bridge)),
+            ("task_manager", "任务管理", TaskManagerPanel(
+                param_bridge=self._param_bridge,
+                visual_bridge=self._visual_bridge)),
             ("config", "设置", SettingsPanel(param_bridge=self._param_bridge)),
-            ("image", "素材管理", ImageManagerPanel(param_bridge=self._param_bridge)),
-            ("accounts", "小号管理", SubAccountPanel(param_bridge=self._param_bridge)),
-            ("history", "执行历史", ExecutionHistoryPanel()),
+            ("image", "素材管理", self._make_material_preview()),
+            ("accounts", "账号管理", SubAccountPanel(param_bridge=self._param_bridge)),
+            ("emulators", "模拟器管理", self._make_emulator_panel()),
+            ("signals", "信号管理", self._make_signal_panel()),
+            ("anomalies", "异常任务", self._make_anomaly_panel()),
         ]
         for key, title, widget in panels:
             self.panels[key] = widget
@@ -223,6 +229,98 @@ class MainWindow(QMainWindow):
         qp = self.panels.get("task_queue")
         if qp is not None and hasattr(qp, 'manual_trigger_requested'):
             qp.manual_trigger_requested.connect(self._on_manual_trigger)
+
+    def _system_bridge(self) -> Any:
+        """ParamBridge.system（游戏/模拟器切换桥，可选）。"""
+        pb = self._param_bridge
+        return getattr(pb, 'system', None) if pb is not None else None
+
+    def _make_emulator_panel(self) -> QWidget:
+        """模拟器管理面板（数据经 SystemBridge 注入）。"""
+        sysb = self._system_bridge()
+        if sysb is not None:
+            panel = EmulatorManagerPanel(
+                list_provider=sysb.emulator_list,
+                save_callback=sysb.save_emulator,
+                delete_callback=sysb.delete_emulator,
+                scan_callback=sysb.scan_emulators,
+            )
+        else:
+            panel = EmulatorManagerPanel()
+        panel.emulators_changed.connect(self._refresh_emulator_combo)
+        return panel
+
+    def _make_signal_panel(self) -> QWidget:
+        """信号管理面板（数据经 VisualBridge 注入，2026-08-16）。"""
+        vb = self._visual_bridge
+        if vb is not None:
+            return SignalManagerPanel(
+                scene_provider=vb.scene_signal_list,
+                trigger_provider=vb.trigger_signal_list,
+                task_provider=vb.task_signal_list,
+                custom_provider=vb.custom_signal_list,
+                add_custom_cb=vb.add_custom_signal,
+                remove_custom_cb=vb.remove_custom_signal,
+            )
+        return SignalManagerPanel()
+
+    def _make_anomaly_panel(self) -> QWidget:
+        """异常任务面板（数据经 VisualBridge 注入，2026-08-16）。"""
+        vb = self._visual_bridge
+        if vb is not None:
+            panel = AnomalyTasksPanel(
+                abnormal_provider=vb.anomaly_abnormal_tasks,
+                list_provider=vb.anomaly_list,
+                mark_handled_cb=vb.anomaly_mark_handled,
+                confirm_fixed_cb=vb.anomaly_confirm_fixed,
+                unresolved_cb=vb.anomaly_unresolved_count,
+            )
+        else:
+            panel = AnomalyTasksPanel()
+        panel.handle_requested.connect(self._jump_to_anomaly_node)
+        return panel
+
+    def _jump_to_anomaly_node(self, task_name: str, node_id: str) -> None:
+        """异常「处理」：切到可视化构建并定位异常节点（2026-08-16）。"""
+        self._switch_panel("visual_builder")
+        vb = self.panels.get("visual_builder")
+        if vb is not None and hasattr(vb, "open_task_and_select"):
+            try:
+                vb.open_task_and_select(task_name, node_id)
+            except Exception:
+                pass
+
+    def _make_material_preview(self) -> QWidget:
+        """素材管理（2026-08-15）：替换失效的老素材管理面板。
+
+        数据源 = 可视化构建素材体系（全局素材库）：
+          场景识别素材（SceneStore）/ 操作识别素材（assets/**/icons/*.json）
+          / OCR识别素材（assets/**/ocr/*.json）
+        删除：场景走 bridge.delete_scene；图标/OCR 由组件删除条目文件。
+        """
+        from ui.visual_builder.material_preview import MaterialPreviewWidget
+        bridge = self._visual_bridge
+        if bridge is not None:
+            def _del_cb(kind: str, key: str, data: dict):
+                if kind == "scene":
+                    ok = bridge.delete_scene(key)
+                    return ok, ("" if ok else "素材库删除失败")
+                return True, ""
+            return MaterialPreviewWidget(
+                assets_dir=str(getattr(bridge, "_assets_dir", "") or ""),
+                scenes_provider=bridge.scene_list,
+                elements_provider=bridge.icon_items,
+                ocr_provider=bridge.ocr_items,
+                scene_loader=bridge.load_scene,
+                delete_callback=_del_cb,
+                scene_save_callback=bridge.save_scene,
+            )
+        try:
+            from core.game_profile import current_game_assets
+            return MaterialPreviewWidget(
+                assets_dir=str(current_game_assets() or ""))
+        except Exception:
+            return MaterialPreviewWidget()
 
     def _switch_panel(self, key: str) -> None:
         """切换中央面板"""
@@ -286,8 +384,8 @@ class MainWindow(QMainWindow):
         """
         连接控制栏按钮 → ParamBridge 的 RunBridge（§3.2 运行传参）。
 
-        用户点击启动/停止/暂停/恢复 → RunBridge 发布事件 → 09 订阅执行。
-        沙盒开关 → RunBridge.set_dry_mode()；自检 → RunBridge.run_self_check()。
+        布局（2026-08-16）：游戏选择 → 连接/断开 → 启动/暂停/停止。
+        沙盒/自检按钮已移除（试跑由可视化构建测试启动覆盖）。
         """
         if not self._param_bridge:
             return
@@ -300,9 +398,169 @@ class MainWindow(QMainWindow):
         cb.stop_clicked.connect(lambda: self._safe_call(run_bridge.request_stop))
         cb.pause_clicked.connect(lambda: self._safe_call(run_bridge.request_pause))
         cb.resume_clicked.connect(lambda: self._safe_call(run_bridge.request_resume))
-        cb.dry_run_toggled.connect(
-            lambda enabled: self._safe_call(lambda: run_bridge.set_dry_mode(enabled)))
-        cb.self_check_clicked.connect(lambda: self._safe_call(self._on_self_check))
+        cb.emulator_changed.connect(self._on_emulator_changed)
+        cb.game_changed.connect(self._on_game_changed)
+        cb.connect_toggled.connect(self._on_connect_toggle)
+
+        # 填充模拟器下拉 + 游戏下拉 + 初始状态
+        self._last_emu = ""
+        self._refresh_emulator_combo()
+        self._last_game = ""
+        if self._visual_bridge is not None and hasattr(self._visual_bridge, 'game_list'):
+            try:
+                games = self._visual_bridge.game_list() or []
+                cb.set_games(games)
+                cur = getattr(self._visual_bridge, 'current_game', '')
+                if cur:
+                    cb.set_current_game(cur)
+                    self._last_game = cur
+            except Exception:
+                pass
+        cb.set_connected(self._is_device_connected())
+
+    def _refresh_emulator_combo(self) -> None:
+        """刷新顶部模拟器下拉（模拟器管理面板增删改后调用）。"""
+        sysb = self._system_bridge()
+        cb = self.control_bar
+        if sysb is None:
+            cb.set_emulators([])
+            return
+        try:
+            items = [(e.get("id", ""),
+                      f"{e.get('name', '')} ({e.get('host', '')}:{e.get('port', '')})")
+                     for e in sysb.emulator_list()]
+        except Exception:
+            items = []
+        cb.set_emulators(items)
+        # 保持当前选中（若被删则回退第一个）
+        if self._last_emu:
+            cb.set_current_emulator(self._last_emu)
+            self._last_emu = cb.current_emulator()
+        if not self._last_emu and items:
+            cb.set_current_emulator(items[0][0])
+            self._last_emu = items[0][0]
+
+    def _on_emulator_changed(self, emu_id: str) -> None:
+        """模拟器下拉切换：断开旧设备 → 连接新模拟器（运行中禁止）。"""
+        if not emu_id:
+            return
+        if self._is_running():
+            self.status_bar.show_message("脚本运行中，无法切换模拟器")
+            if self._last_emu:
+                self.control_bar.set_current_emulator(self._last_emu)
+            return
+        sysb = self._system_bridge()
+        if sysb is None:
+            self._last_emu = emu_id
+            return
+        self.status_bar.show_message(f"正在连接模拟器...")
+        ok = sysb.switch_emulator(emu_id)
+        if ok:
+            self._last_emu = emu_id
+            self.control_bar.set_connected(True)
+            self.status_bar.show_message("模拟器已连接")
+        else:
+            self.status_bar.show_message("模拟器连接失败（未启动？ADB 调试未开？）")
+            if self._last_emu:
+                self.control_bar.set_current_emulator(self._last_emu)
+
+    def _is_device_connected(self) -> bool:
+        """当前设备是否已连接（RunBridge 优先，回退 VisualBridge）"""
+        run_bridge = getattr(self._param_bridge, 'run', None)
+        if run_bridge is not None and hasattr(run_bridge, 'is_connected'):
+            try:
+                return bool(run_bridge.is_connected())
+            except Exception:
+                pass
+        vb = self._visual_bridge
+        if vb is not None and hasattr(vb, 'is_connected'):
+            try:
+                return bool(vb.is_connected())
+            except Exception:
+                pass
+        return False
+
+    def _on_game_changed(self, game_id: str) -> None:
+        """切换游戏：B方案后端整体重建（仅脚本未运行时允许，2026-08-16）。"""
+        if not game_id:
+            return
+        if self._is_running():
+            self.status_bar.show_message("脚本运行中，无法切换游戏")
+            # 回退下拉
+            cb = self.control_bar
+            if hasattr(cb, 'set_current_game') and self._last_game:
+                cb.set_current_game(self._last_game)
+            return
+        sysb = self._system_bridge()
+        if sysb is not None:
+            ok = sysb.switch_game(game_id)
+            if not ok:
+                self.status_bar.show_message(f"切换游戏失败: {game_id}")
+                if self._last_game:
+                    self.control_bar.set_current_game(self._last_game)
+                return
+        self._last_game = game_id
+        if self._visual_bridge is not None \
+                and hasattr(self._visual_bridge, 'set_current_game'):
+            try:
+                self._visual_bridge.set_current_game(game_id)
+            except Exception:
+                pass
+        # 可视化构建面板：刷新通用节点/素材下拉（跟随全局游戏）
+        vb_panel = self.panels.get("visual_builder")
+        if vb_panel is not None and hasattr(vb_panel, 'on_game_switched'):
+            try:
+                vb_panel.on_game_switched()
+            except Exception:
+                pass
+        self.status_bar.show_message(f"已切换游戏: {game_id}")
+        self.refresh_task_list()
+        self._refresh_queue_panel()
+        # 任务管理/素材管理面板跟随新游戏目录刷新
+        for key in ("task_manager",):
+            p = self.panels.get(key)
+            if p is not None and hasattr(p, 'refresh'):
+                try:
+                    p.refresh()
+                except Exception:
+                    pass
+
+    def _is_running(self) -> bool:
+        run_bridge = getattr(self._param_bridge, 'run', None)
+        ctrl = getattr(run_bridge, '_ctrl', None) if run_bridge else None
+        if ctrl is not None:
+            try:
+                return bool(getattr(ctrl, 'is_running', False))
+            except Exception:
+                pass
+        return False
+
+    def _on_connect_toggle(self) -> None:
+        """连接/断开模拟器按钮（2026-08-16）。
+
+        连接时优先连接顶部选中的模拟器（有选择时），否则走自动发现。
+        """
+        run_bridge = getattr(self._param_bridge, 'run', None)
+        if run_bridge is None:
+            return
+        if self._is_running():
+            self.status_bar.show_message("脚本运行中，请先停止再操作连接")
+            return
+        connected = self._is_device_connected()
+        if connected:
+            self.status_bar.show_message("正在断开连接...")
+            run_bridge.disconnect_device()
+        else:
+            emu_id = self.control_bar.current_emulator()
+            sysb = self._system_bridge()
+            self.status_bar.show_message("正在连接模拟器...")
+            if emu_id and sysb is not None:
+                ok = sysb.switch_emulator(emu_id)
+            else:
+                ok = run_bridge.connect_device()
+            self.status_bar.show_message(
+                "设备连接成功" if ok else "连接失败（模拟器未启动？）")
+        self.control_bar.set_connected(self._is_device_connected())
 
     @staticmethod
     def _safe_call(fn) -> None:
@@ -351,13 +609,6 @@ class MainWindow(QMainWindow):
                 task_panel.load_tasks(metas)
             except Exception:
                 task_panel.load_tasks(tasks)
-            # 通用模块（common，不单独执行）
-            if hasattr(task_panel, 'load_generic'):
-                try:
-                    gmetas = self._param_bridge.task.get_generic_modules()
-                    task_panel.load_generic(gmetas)
-                except Exception:
-                    pass
         # 游戏任务面板：加载带 uses_* 声明的元数据（设计书 §4.3 动态表单）
         game_panel = self.panels.get("game_task")
         if game_panel and hasattr(game_panel, 'load_tasks'):
@@ -383,6 +634,8 @@ class MainWindow(QMainWindow):
         self._bus.subscribe(Events.TASK_SKIPPED, self._on_task_skipped)
         self._bus.subscribe(Events.EXECUTOR_STEP_COMPLETED, self._on_step_done)
         self._bus.subscribe(Events.TASK_QUEUED, self._on_task_queued)
+        self._bus.subscribe(Events.TASK_PAUSED, self._on_task_pause_state)
+        self._bus.subscribe(Events.TASK_RESUMED, self._on_task_pause_state)
 
         # 运行启停
         self._bus.subscribe(Events.RUN_STARTED, lambda **kw: self._on_run_started())
@@ -400,6 +653,10 @@ class MainWindow(QMainWindow):
         # 调度更新
         self._bus.subscribe(Events.SCHEDULE_UPDATED, self._on_schedule_updated)
 
+        # 可视化任务保存/删除 → 刷新任务列表（游戏任务/任务管理可见）
+        self._bus.subscribe(Events.VISUAL_TASK_CHANGED,
+                            lambda **kw: self.refresh_task_list())
+
         # 日志
         self._bus.subscribe(Events.LOG_RECORD, self._on_log_record)
         self._bus.subscribe(Events.NOTIFY_ALERT, self._on_notify_alert)
@@ -408,9 +665,6 @@ class MainWindow(QMainWindow):
         self._bus.subscribe(Events.SCENE_UNKNOWN, self._on_scene_unknown)
         self._bus.subscribe(Events.SCENE_UPDATED, self._on_scene_updated)
         self._bus.subscribe(Events.ASSETS_MISSING, self._on_assets_missing)
-
-        # 启动检查
-        self._bus.subscribe(Events.PREFLIGHT_COMPLETE, self._on_preflight_complete)
 
         # 任务列表变更
         self._bus.subscribe(Events.TASKS_LIST_CHANGED,
@@ -434,19 +688,6 @@ class MainWindow(QMainWindow):
             self.status_bar.update_current_account(value)
         elif key == "today_run_duration" and self.status_bar:
             self.status_bar.update_run_duration(value)
-        elif key == "dry_run_mode" and self.status_bar:
-            self.status_bar.update_dry_run_mode(value)
-        elif key == "execution_history" and isinstance(value, list):
-            # 执行历史面板（§3.9）：刷新记录
-            history_panel = self.panels.get("history")
-            if history_panel and hasattr(history_panel, 'add_record'):
-                history_panel.table.setRowCount(0)
-                for rec in value[-100:]:
-                    if isinstance(rec, dict):
-                        ts = rec.get("timestamp", "")[:19] if rec.get("timestamp") else ""
-                        status = "成功" if rec.get("success") else "失败"
-                        duration = f"{rec.get('duration', 0):.1f}s"
-                        history_panel.add_record(ts, rec.get("task_name", ""), status, duration)
         elif key == "sub_account_status" and isinstance(value, dict):
             # 小号状态面板（§2.2）
             acc_panel = self.panels.get("accounts")
@@ -493,8 +734,12 @@ class MainWindow(QMainWindow):
         """任务入队/出队 → 刷新队列三区"""
         self._refresh_queue_panel()
 
+    def _on_task_pause_state(self, **kw: Any) -> None:
+        """任务暂停/唤醒（2026-08-16 信号体系）→ 刷新队列面板暂停展示"""
+        self._refresh_queue_panel()
+
     def _refresh_queue_panel(self) -> None:
-        """刷新任务队列三区：正在执行 / 待执行 / 未开始"""
+        """刷新任务队列：正在执行 / 待执行 / 待触发 / 未开始 / 已失效 + 暂停展示"""
         panel = self.panels.get("task_queue")
         if panel is None or not hasattr(panel, 'update_panel'):
             return
@@ -502,6 +747,8 @@ class MainWindow(QMainWindow):
         pending: list = []
         upcoming: list = []
         invalid: list = []
+        trigger: list = []
+        paused: list = []
         runtime_q: list = []
         due: list = []
         try:
@@ -509,6 +756,7 @@ class MainWindow(QMainWindow):
                 run = self._param_bridge.run
                 current = run.get_current_task() if hasattr(run, 'get_current_task') else None
                 runtime_q = run.get_queue_snapshot() if hasattr(run, 'get_queue_snapshot') else []
+                paused = run.get_paused_snapshot() if hasattr(run, 'get_paused_snapshot') else []
             if self._param_bridge and hasattr(self._param_bridge, 'task'):
                 task = self._param_bridge.task
                 # 待执行 = 运行时已入队任务 + 调度器到期任务（设计书 schedule_queue）
@@ -516,6 +764,9 @@ class MainWindow(QMainWindow):
                     due = task.get_due_tasks()
                 if hasattr(task, 'get_upcoming'):
                     upcoming = task.get_upcoming()
+                # 待触发（信号体系）：含任务信号触发器节点的任务（2026-08-16）
+                if hasattr(task, 'get_pending_trigger_tasks'):
+                    trigger = task.get_pending_trigger_tasks()
                 # 已失效 = 已过期 + 待配置（任务库未配置/停用）
                 if hasattr(task, 'get_invalid_tasks'):
                     invalid = task.get_invalid_tasks()
@@ -536,17 +787,10 @@ class MainWindow(QMainWindow):
                 continue
             pending.append(d)
             seen.add(name)
-        # 总体进度：当前任务 BattleLoop 场次进度（无则 0）
-        prog = 0
-        if self._param_bridge and hasattr(self._param_bridge, 'run') \
-                and hasattr(self._param_bridge.run, 'get_current_progress'):
-            try:
-                prog = int(self._param_bridge.run.get_current_progress() or 0)
-            except Exception:
-                prog = 0
-        self.ui_update.emit(lambda: panel.update_panel(current, pending, upcoming, invalid))
-        if hasattr(panel, 'set_progress'):
-            self.ui_update.emit(lambda: panel.set_progress(prog))
+        # 总体进度条已退役（2026-08-16）：任务队列面板改为
+        # 「当前步骤」+ 执行进度抽屉（可视化任务 VISUAL_PROGRESS 快照驱动）
+        self.ui_update.emit(lambda: panel.update_panel(current, pending, upcoming,
+                                                       invalid, trigger, paused))
 
     def _on_manual_trigger(self, task_name: str) -> None:
         """手动触发触发式任务（trigger）：UI"⚡触发"按钮 → TaskBridge.update_next_run(name, now)。
@@ -564,48 +808,9 @@ class MainWindow(QMainWindow):
                 pass
 
     def _on_self_check(self) -> None:
-        """自检按钮：RunBridge.run_self_check() → 弹窗展示结果（§3.7）"""
-        run_bridge = getattr(self._param_bridge, 'run', None) if self._param_bridge else None
-        if not run_bridge or not hasattr(run_bridge, 'run_self_check'):
-            QMessageBox.information(self, "自检", "运行控制器未连接，无法自检")
-            return
-        try:
-            result = run_bridge.run_self_check()
-        except Exception as e:
-            QMessageBox.warning(self, "自检失败", str(e))
-            return
-
-        lines = []
-        ok_all = True
-        # 配置
-        if result.get("config_valid"):
-            lines.append("✅ 配置：合法")
-        else:
-            ok_all = False
-            errs = result.get("config_errors") or ["未知"]
-            lines.append(f"❌ 配置：非法（{errs}）")
-        # ADB
-        if result.get("adb_connectivity"):
-            lines.append("✅ ADB 连接：已连接")
-        else:
-            ok_all = False
-            lines.append("❌ ADB 连接：未连接（模拟器未开启？）")
-        # 素材
-        if result.get("assets_complete"):
-            lines.append("✅ 素材：完整")
-        else:
-            ok_all = False
-            missing = result.get("missing_assets") or []
-            lines.append(f"❌ 素材：缺失 {missing}")
-        # 依赖
-        if result.get("dependencies_complete"):
-            lines.append("✅ 依赖：完整")
-        else:
-            ok_all = False
-            lines.append(f"❌ 依赖：缺失 {result.get('missing_dependencies')}")
-
-        title = "✅ 自检通过" if ok_all else "⚠️ 自检发现问题"
-        QMessageBox.information(self, title, "\n".join(lines))
+        """自检按钮已移除（2026-08-16）：连接状态由顶部连接按钮反映；
+        后端 RunBridge.run_self_check 保留（备查），此入口不再使用。"""
+        return None
 
     def _on_task_skipped(self, **kw: Any) -> None:
         task_name = kw.get("task_name", "")
@@ -635,9 +840,11 @@ class MainWindow(QMainWindow):
 
     def _on_connection_lost(self, **kw: Any) -> None:
         self.ui_update.emit(lambda: self.status_bar.update_connection("disconnected"))
+        self.ui_update.emit(lambda: self.control_bar.set_connected(False))
 
     def _on_connection_restored(self, **kw: Any) -> None:
         self.ui_update.emit(lambda: self.status_bar.update_connection("connected"))
+        self.ui_update.emit(lambda: self.control_bar.set_connected(True))
 
     def _on_connection_error(self, **kw: Any) -> None:
         self.ui_update.emit(lambda: self.status_bar.show_message("连接错误"))
@@ -692,10 +899,6 @@ class MainWindow(QMainWindow):
 
     def _on_assets_missing(self, **kw: Any) -> None:
         self.ui_update.emit(lambda: self.log_panel.append_log(level="WARNING", message="素材缺失"))
-
-    def _on_preflight_complete(self, **kw: Any) -> None:
-        result = kw.get("result", {})
-        self.ui_update.emit(lambda: self.status_bar.show_message("启动自检完成"))
 
     # ── 窗口事件 ──────────────────────────────────────────
 

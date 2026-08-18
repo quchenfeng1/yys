@@ -73,16 +73,6 @@ class TaskStats:
     last_run: float = 0.0
 
 
-@dataclass
-class TaskRecord:
-    """任务执行记录（§5.2）"""
-    task_name: str = ""
-    start_time: float = 0.0
-    duration: float = 0.0
-    success: bool = False
-    error: str | None = None
-
-
 # ═══════════════════════════════════════════════════════════════
 #  Monitor 主入口
 # ═══════════════════════════════════════════════════════════════
@@ -282,7 +272,7 @@ class Monitor:
         """
         记录任务完成统计（§3.2 + §5.3）。
 
-        更新 _task_stats → 追加 execution_history → 记录指标
+        更新 _task_stats → 记录指标（执行历史面板已移除，2026-08-16）。
         """
         if duration is None:
             start = self._task_timers.pop(task_name, None)
@@ -302,40 +292,9 @@ class Monitor:
         # 记录到 MetricsCollector
         self._metrics.record_task_completed(duration=duration, success=success)
 
-        # 追加到 execution_history（§6.2 → 07）
-        self._append_execution_history(task_name, success, duration)
-
     def set_state_manager(self, state_mgr: Any) -> None:
         """注入 StateManager 引用（§2.1）"""
         self._state_mgr = state_mgr
-
-    def _append_execution_history(self, task_name: str, success: bool, duration: float) -> None:
-        """
-        向 StateManager 的 execution_history 追加执行记录（§6.2）。
-
-        读取现有列表 → 追加新记录 → 截断 100 条 → 写回。
-        """
-        if not self._state_mgr or not hasattr(self._state_mgr, 'get_state'):
-            return
-
-        try:
-            # 复制一份再追加：get_state 返回的是 store 内同一个可变对象，
-            # 原地 append 会触发 StateManager 同引用检测（value is old）→ 事件被拦截
-            history = list(self._state_mgr.get_state("execution_history", []) or [])
-            if not isinstance(history, list):
-                history = []
-            history.append({
-                "task_name": task_name,
-                "success": success,
-                "duration": duration,
-                "timestamp": datetime.now().isoformat(),
-            })
-            # 最多保留最近 100 条
-            if len(history) > 100:
-                history = history[-100:]
-            self._state_mgr.set_state("execution_history", history)
-        except Exception:
-            pass
 
     def get_metrics(self, task_name: str) -> dict[str, Any]:
         """查询单个任务指标（§5.3）"""
@@ -517,13 +476,12 @@ class Monitor:
     #  §5.3 + §6.1 附加方法
     # ═══════════════════════════════════════════════════════════
 
-    def query_task_history(self, task_name: str, date: str | None = None) -> list[TaskRecord]:
+    def query_task_history(self, task_name: str, date: str | None = None) -> list:
         """
-        查询指定任务在指定日期的执行历史明细（§5.3）。
-
-        从 structured JSONL 中按任务名和时间过滤。
+        查询指定任务在指定日期的执行历史明细（§5.3，执行历史面板已移除
+        2026-08-16，保留结构化日志查询能力，返回 dict 列表）。
         """
-        records: list[TaskRecord] = []
+        records: list[dict] = []
         date_str = date or datetime.now().strftime("%Y-%m-%d")
         log_file = self._structured_dir / f"{date_str}.jsonl"
 
@@ -542,11 +500,11 @@ class Monitor:
                         continue
                     if entry.get("task") != task_name:
                         continue
-                    records.append(TaskRecord(
-                        task_name=entry.get("task", ""),
-                        duration=0.0,
-                        success=entry.get("level") != "ERROR",
-                    ))
+                    records.append({
+                        "task_name": entry.get("task", ""),
+                        "duration": 0.0,
+                        "success": entry.get("level") != "ERROR",
+                    })
         except Exception:
             pass
 

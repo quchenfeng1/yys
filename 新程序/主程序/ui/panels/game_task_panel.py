@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QPushButton, QScrollArea,
@@ -19,6 +19,8 @@ from PyQt5.QtWidgets import (
 
 # 设计书 §5.2 重复规则（单次任务两种模式：每次启动执行 on_enter / 只执行一次 once）
 # special / expire_at 已从下拉移除（与 daily/active_range 重叠），代码层保留兼容旧配置
+# 2026-08-16 退役：trigger「特殊条件触发」从下拉移除（新体系 = 图内任务信号触发器节点），
+# 代码层保留兼容旧配置（渲染旧 trigger 任务时临时插入「已下线」选项，保存不丢字段）
 REPEAT_TYPES = [
     ("daily", "每日"),
     ("weekly", "每周"),
@@ -27,22 +29,65 @@ REPEAT_TYPES = [
     ("interval_hours", "间隔N小时"),
     ("on_enter", "每次启动执行"),
     ("once", "只执行一次"),
-    ("trigger", "特殊条件触发"),
 ]
+
+# 旧 trigger 配置渲染时的兼容选项（不下拉提供，仅回显）
+LEGACY_TRIGGER = ("trigger", "特殊条件触发（已下线）")
+
+# 变量/常量组标题与边框留白（2026-08-16）：标题上移、左对齐组框左边框
+_VAR_GROUP_QSS = (
+    "QGroupBox {"
+    " font-size:12px; font-weight:bold; color:#333;"
+    " border:1px solid #c8ccd4; border-radius:4px;"
+    " margin-top:8px;"
+    " padding:12px 10px 8px 10px;"
+    " background:#f7f8fa; }"
+    "QGroupBox::title {"
+    " subcontrol-origin: margin;"
+    " subcontrol-position: top left;"
+    " left:0px; padding:0 8px;"
+    " background:#f7f8fa; color:#333; }"
+)
 
 
 class GameTaskPanel(QWidget):
     """游戏任务面板（列表 + 动态配置表单）"""
 
-    def __init__(self, param_bridge: Any = None, parent=None):
+    # 后台线程事件 → 主线程 UI 更新（可调用变量实时同步，2026-08-16）
+    _ui_signal = pyqtSignal(object)
+
+    def __init__(self, param_bridge: Any = None, visual_bridge: Any = None,
+                 parent=None):
         super().__init__(parent)
         self._param_bridge = param_bridge
+        self._visual_bridge = visual_bridge  # 可视化桥（变量/常量 tab 数据源，2026-08-16）
         self._current_name: str = ""
         self._form_widgets: dict[str, Any] = {}
+        self._var_inputs: dict[str, Any] = {}   # 变量配置 tab：变量键 → 输入控件
+        self._var_task: dict | None = None      # 当前可视化任务定义（变量 tab 渲染用）
+        self._callable_display: dict[str, tuple] = {}  # 可调用变量键 → (值标签, 编辑框)
         self._loaded_next_run: str = ""  # 渲染表单时系统显示的 next_run（区分手动修改）
         self._slot_rows: list = []  # 执行时段动态行 [[开始QLineEdit, 结束QLineEdit], ...]（读取用）
         self._slot_row_widgets: list = []  # 执行时段每行容器 QWidget（整体显隐用，含✕删除按钮）
         self._slot_container: Any = None
+
+        self._ui_signal.connect(lambda fn: fn())
+
+        # 可调用变量实时同步订阅（后台线程 → 信号 → 主线程更新）
+        bus = getattr(visual_bridge, "_bus", None)
+        if bus is None:
+            try:
+                from core.event_bus import get_global_bus
+                bus = get_global_bus()
+            except Exception:
+                bus = None
+        if bus is not None:
+            try:
+                from core.events import Events
+                bus.subscribe(Events.CALLABLE_VAR_CHANGED,
+                              self._on_callable_changed)
+            except Exception:
+                pass
 
         layout = QHBoxLayout(self)
 
@@ -83,6 +128,8 @@ class GameTaskPanel(QWidget):
             # 标记战斗任务
             if meta.get("uses_battle"):
                 item.setToolTip("战斗任务：含战斗配置区")
+            elif meta.get("is_visual"):
+                item.setToolTip("可视化任务：变量/常量参数 + 调度推送设置")
         self.task_list.blockSignals(False)
         # 默认选中第一个
         if self.task_list.count() > 0:
@@ -141,10 +188,20 @@ class GameTaskPanel(QWidget):
             pass
 
     def _get_signal_options(self) -> list[tuple[str, str]]:
-        """从素材管理读取 scene/ 识图素材配置的识别信号列表。
+        """触发信号下拉：优先 SceneStore 场景信号（素材库重构后，2026-08-16）。
 
-        返回 [(信号名, 素材识别名), ...]，供触发模板多选下拉使用。
+        返回 [(信号名, 显示标签), ...]。回退旧 manifest（scene/ 素材 signal）。
         """
+        # 新源：SceneStore 场景（visual_bridge.signal_options → [(信号, 场景id)]）
+        vb = getattr(self, "_visual_bridge", None)
+        if vb is not None and hasattr(vb, 'signal_options'):
+            try:
+                opts = vb.signal_options()
+                if opts:
+                    return [(sig, f"场景:{sid}") for sig, sid in opts]
+            except Exception:
+                pass
+        # 旧源：assets manifest（兼容未重构的旧素材）
         try:
             from core.asset_meta import AssetMetaStore
             from core.game_profile import current_game_assets
@@ -193,14 +250,13 @@ class GameTaskPanel(QWidget):
 
     def _render_form(self, detail: dict[str, Any]) -> None:
         self._clear_form()
+        self._var_inputs = {}
+        self._var_task = None
+        self._callable_display = {}
         w = self._form_widgets
         name = detail.get("name", "")
         display = detail.get("display_name", "") or name
         task_type = detail.get("task_type", "event_task")
-        uses_battle = bool(detail.get("uses_battle", False))
-        uses_team = bool(detail.get("uses_team", False))
-        uses_soul = bool(detail.get("uses_soul", False))
-        uses_stamina = bool(detail.get("uses_stamina", False))
 
         # 标题
         title = QLabel(f"📋 {display}")
@@ -216,8 +272,7 @@ class GameTaskPanel(QWidget):
         w["enabled"] = cb_enabled
         self.form_layout.addWidget(cb_enabled)
 
-        # ── 双 Tab：执行配置 / 战斗配置 ──
-        self._uses_battle = uses_battle
+        # ── Tab：执行配置（+ 可视化任务专属变量/常量 Tab，2026-08-16） ──
         tabs = QTabWidget()
 
         # ══════════ Tab1 执行配置 ══════════
@@ -238,6 +293,10 @@ class GameTaskPanel(QWidget):
         cb_repeat = QComboBox()
         for val, label in REPEAT_TYPES:
             cb_repeat.addItem(label, val)
+        # 旧 trigger 配置兼容：下拉额外插入「已下线」选项用于回显，
+        # 切换走后再选不回该类型（新任务无法创建 trigger）
+        if rep_type == "trigger" and cb_repeat.findData("trigger") < 0:
+            cb_repeat.addItem(LEGACY_TRIGGER[1], LEGACY_TRIGGER[0])
         idx = cb_repeat.findData(rep_type)
         cb_repeat.setCurrentIndex(idx if idx >= 0 else 0)
         f_sched.addRow(lbl_repeat, cb_repeat)
@@ -246,45 +305,14 @@ class GameTaskPanel(QWidget):
         # 切换 → 联动显隐
         cb_repeat.currentIndexChanged.connect(self._update_repeat_fields)
 
-        # 触发模板（trigger 专属）：优先信号名多选下拉（素材管理 scene/ 配置的 signal），
-        # 无可用信号时回退自由文本输入（兼容旧素材路径写法）。
-        _tt_label = QLabel("触发信号:")
-        _rep_tt = (repeat.get("trigger_templates") if isinstance(repeat, dict)
-                   else getattr(repeat, 'trigger_templates', None)) or []
-        _signals = self._get_signal_options()  # [(信号名, 素材识别名)]
-        if _signals:
-            from ui.widgets.multi_select_combo import MultiSelectCombo
-            ed_tt = MultiSelectCombo()
-            # data=信号名（保存进 trigger_templates），label 显示"信号名（素材名）"
-            items = [(sig, f"{sig}（{rel}）") for sig, rel in _signals]
-            sig_names = {sig for sig, _ in _signals}
-            rel_by_sig = {rel: sig for sig, rel in _signals}
-            # 兼容旧配置：非信号名的旧值（素材路径）补入选项，避免保存时丢字段
-            for t in _rep_tt:
-                if t and t not in sig_names and t not in rel_by_sig:
-                    items.append((t, f"{t}（旧素材路径）"))
-            ed_tt.set_items(items)
-            # 回显：信号名直接勾选；素材路径 → 若对应素材有信号名则用信号名勾选，否则原样勾选
-            checked = []
-            for t in _rep_tt:
-                if t in sig_names:
-                    checked.append(t)
-                elif t in rel_by_sig:
-                    checked.append(rel_by_sig[t])
-                elif t:
-                    checked.append(t)
-            ed_tt.set_selected(checked)
-            ed_tt.setPlaceholderText("选择识别信号（素材管理 scene/ 素材已配置）")
-        else:
-            ed_tt = QLineEdit()
-            ed_tt.setPlaceholderText("逗号分隔素材名，如 trigger/activity_enter（素材管理配置信号后可选）")
-            if _rep_tt:
-                ed_tt.setText(", ".join(_rep_tt))
-        f_sched.addRow(_tt_label, ed_tt)
-        _tt_label.setVisible(False)
-        ed_tt.setVisible(False)
-        w["trigger_label"] = _tt_label
-        w["trigger_templates"] = ed_tt
+        # ── trigger 旧字段兼容（2026-08-16 退役）：
+        # 触发信号多选下拉已移除（新体系 = 图内任务信号触发器节点）；
+        # 旧 trigger 配置的 trigger_templates 渲染时留存，保存时不丢失
+        self._legacy_trigger_templates = [
+            str(t) for t in ((repeat.get("trigger_templates")
+                              if isinstance(repeat, dict)
+                              else getattr(repeat, 'trigger_templates', None))
+                             or [])]
 
         # 每周几（weekly 专属，多选：如每周三、周六都可执行；全不选=每天）
         wd_widget = QWidget()
@@ -387,46 +415,10 @@ class GameTaskPanel(QWidget):
         w["active_end_label"] = lbl_ar_end
         w["active_range_end"] = ed_ar_end
 
-        # 活动循环次数（循环体循环次数上限；每轮循环成功 +1，显示累计，达到 → 失效区）
-        sp_total = QSpinBox()
-        sp_total.setRange(0, 999999)
-        sp_total.setSpecialValueText("不限")
-        sp_total.setValue(int(detail.get("total_count") or 0))
-        sp_total.setToolTip("循环体循环次数上限（0=不限）。\n"
-                            "每完成一轮循环累计一次，右侧显示累计循环次数；\n"
-                            "累计达到该上限后任务进入失效区。")
-        lbl_total = QLabel("活动循环次数:")
-        total_holder = QWidget()
-        th = QHBoxLayout(total_holder)
-        th.setContentsMargins(0, 0, 0, 0)
-        th.setSpacing(6)
-        th.addWidget(sp_total)
-        lbl_cycle_done = QLabel("")
-        th.addWidget(lbl_cycle_done)
-        th.addStretch(1)
-        f_sched.addRow(lbl_total, total_holder)
-        w["total_label"] = lbl_total
-        w["total_count"] = sp_total
-        w["cycle_done_label"] = lbl_cycle_done
+        # 活动循环次数（2026-08-16 移除）：改为图内「可调用变量 + 参数处理 + 判断」实现，
+        # 不在执行配置中设定（详见示教节点设计构想.md 第十四节）
 
         te.addWidget(g_sched)
-
-        # ── 📊 循环次数（任务循环体执行几次） ──
-        g_freq, freq_content = panel_group("📊 循环次数")
-        f_freq = QFormLayout()
-        freq_content.addLayout(f_freq)
-
-        sp_loop = QSpinBox()
-        sp_loop.setRange(1, 999)
-        # 调度器优先读取 repeat.loop_count，表单显示也优先 repeat 内值，保持同步
-        rep_loop = repeat.get("loop_count") if isinstance(repeat, dict) else None
-        sp_loop.setValue(int(rep_loop or detail.get("loop_count") or 1))
-        sp_loop.setToolTip("任务的循环体执行几次（每次触发跑几轮战斗等）\n"
-                           "与「周期最大触发次数」（每天触发几次）不同，二者相乘为周期总工作量。")
-        f_freq.addRow("循环次数:", sp_loop)
-        w["loop_count"] = sp_loop
-
-        te.addWidget(g_freq)
 
         # ── 其他：优先级 / 下次执行 ──
         g_other, other_content = panel_group("其他")
@@ -448,116 +440,13 @@ class GameTaskPanel(QWidget):
         te.addStretch(1)
         tabs.addTab(tab_exec, "⚙ 执行配置")
 
-        # ══════════ Tab2 战斗配置（uses_battle=True） ══════════
-        if uses_battle:
-            tab_battle = QWidget()
-            tb = QVBoxLayout(tab_battle)
-            tb.setContentsMargins(6, 6, 6, 6)
-
-            # ── 🎴 御魂配置（选择御魂） ──
-            g_soul, soul_content = panel_group("🎴 御魂配置（选择御魂）")
-            f_soul = QFormLayout()
-            soul_content.addLayout(f_soul)
-            _soul = detail.get("soul_setup") if isinstance(detail.get("soul_setup"), dict) else {}
-            ed_grp = QLineEdit(str(_soul.get("group", "")))
-            ed_grp.setPlaceholderText("组名，如：御魂副本")
-            f_soul.addRow("组名:", ed_grp)
-            w["soul_group"] = ed_grp
-            ed_steam = QLineEdit(str(_soul.get("team", "")))
-            ed_steam.setPlaceholderText("队伍名，如：御魂十层")
-            f_soul.addRow("队伍名:", ed_steam)
-            w["soul_team"] = ed_steam
-            _pos = _soul.get("position") or [1, 1]
-            sp_pg = QSpinBox()
-            sp_pg.setRange(1, 99)
-            sp_pg.setValue(int(_pos[0]) if len(_pos) > 0 and _pos[0] else 1)
-            f_soul.addRow("位置·分组序号:", sp_pg)  # 第 N 个分组按钮
-            w["soul_pos_group"] = sp_pg
-            sp_pt = QSpinBox()
-            sp_pt.setRange(1, 99)
-            sp_pt.setValue(int(_pos[1]) if len(_pos) > 1 and _pos[1] else 1)
-            f_soul.addRow("位置·队伍序号:", sp_pt)  # 第 M 个队伍名
-            w["soul_pos_team"] = sp_pt
-            tb.addWidget(g_soul)
-
-            # ── 🛡 战前准备 ──
-            g_prep, prep_content = panel_group("🛡 战前准备")
-            f_prep = QFormLayout()
-            prep_content.addLayout(f_prep)
-            cb_lock = QCheckBox("锁定队伍（选是则无法更换）")
-            cb_lock.setChecked(bool(detail.get("lock_team", False)))
-            f_prep.addRow("是否锁定队伍:", cb_lock)
-            w["lock_team"] = cb_lock
-            cb_chg = QCheckBox("更换队伍（第1次战斗前解锁，第2次战斗前锁定）")
-            cb_chg.setChecked(bool(detail.get("change_team", False)))
-            f_prep.addRow("是否更换队伍:", cb_chg)
-            w["change_team"] = cb_chg
-            tb.addWidget(g_prep)
-
-            # ── ⚔ 战斗参数 ──
-            g_bparam, bparam_content = panel_group("⚔ 战斗参数")
-            f_bparam = QFormLayout()
-            bparam_content.addLayout(f_bparam)
-            ed_teamid = QLineEdit(detail.get("team_id") or "")
-            ed_teamid.setPlaceholderText("选择或输入阵容 ID")
-            f_bparam.addRow("阵容预设:", ed_teamid)
-            w["team_id"] = ed_teamid
-            sp_floor = QSpinBox()
-            sp_floor.setRange(1, 999)
-            sp_floor.setSpecialValueText("默认")
-            sp_floor.setValue(int(detail.get("floor") or 0))
-            f_bparam.addRow("副本层数:", sp_floor)
-            w["floor"] = sp_floor
-            sp_fail = QSpinBox()
-            sp_fail.setRange(1, 99)
-            sp_fail.setValue(int(detail.get("max_fail_streak") or 10))
-            f_bparam.addRow("失败容忍:", sp_fail)
-            w["max_fail_streak"] = sp_fail
-            tb.addWidget(g_bparam)
-
-            # ── 🍃 体力配置（uses_stamina=True 显示） ──
-            if uses_stamina:
-                g_sta, sta_content = panel_group("🍃 体力配置")
-                f_sta = QFormLayout()
-                sta_content.addLayout(f_sta)
-                sp_stamina = QSpinBox()
-                sp_stamina.setRange(0, 999)
-                sp_stamina.setSpecialValueText("不检查")
-                sp_stamina.setValue(int(detail.get("stamina_required") or 0))
-                f_sta.addRow("体力门槛:", sp_stamina)
-                w["stamina_required"] = sp_stamina
-                tb.addWidget(g_sta)
-
-            # ── 👥 组队配置（主号带队带小号刷副本，§3.10 组队协调） ──
-            g_coop, coop_content = panel_group("👥 组队配置（带小号刷副本）")
-            f_coop = QFormLayout()
-            coop_content.addLayout(f_coop)
-            _teaming = detail.get("teaming") if isinstance(detail.get("teaming"), dict) else {}
-            # 组队小号：优先从「小号管理」多选下拉；无小号数据时回退文本输入
-            sub_options = self._get_sub_options()
-            if sub_options:
-                from ui.widgets.multi_select_combo import MultiSelectCombo
-                ed_subs = MultiSelectCombo()
-                ed_subs.set_items(sub_options)
-                saved = _teaming.get("sub_ids") or []
-                ed_subs.set_selected([s for s in saved
-                                      if any(s == d for d, _ in sub_options)])
-            else:
-                ed_subs = QLineEdit(", ".join(_teaming.get("sub_ids") or []) if _teaming else "")
-                ed_subs.setPlaceholderText("如 sub1, sub2（留空不组队；菜单「小号管理」添加小号后可选）")
-            f_coop.addRow("组队小号:", ed_subs)
-            w["teaming_sub_ids"] = ed_subs
-            # 说明：当前仅支持主号带队（大号创建队伍，小号接受邀请+准备）
-            # 轮数复用上方「每轮循环」（loop_count），不单独配置
-            lbl_coop = QLabel("主号带队（大号创建队伍，小号接受邀请+准备）\n"
-                              "组队轮数 = 上方「每轮循环」（每次触发打几轮）")
-            lbl_coop.setWordWrap(True)
-            lbl_coop.setStyleSheet("color: #888; font-size: 12px;")
-            f_coop.addRow("说明:", lbl_coop)
-            tb.addWidget(g_coop)
-
-            tb.addStretch(1)
-            tabs.addTab(tab_battle, "⚔ 战斗配置")
+        # ══════════ Tab2/3 变量配置 + 常量展示（可视化任务专属，2026-08-16）
+        # 旧「⚔ 战斗配置」Tab 已取消（业务参数由变量组/常量组承载）
+        is_visual = bool(detail.get("is_visual"))
+        if is_visual:
+            self._var_task = self._load_visual_task(name)
+            tabs.addTab(self._make_var_tab(), "🔢 变量配置")
+            tabs.addTab(self._make_const_tab(), "📌 常量展示")
 
         self.form_layout.addWidget(tabs)
 
@@ -568,10 +457,274 @@ class GameTaskPanel(QWidget):
 
         # 初始化重复规则联动状态
         self._update_repeat_fields()
-        # 刷新「活动循环次数」累计显示（已循环 x/y）
-        self._refresh_cycle_done()
 
         self.form_layout.addStretch()
+
+    # ══════ 变量配置 / 常量展示（可视化任务专属，2026-08-16）══════
+
+    def _load_visual_task(self, name: str) -> dict | None:
+        """从可视化桥加载任务定义（变量/常量数据源）"""
+        vb = self._visual_bridge
+        if vb is None:
+            return None
+        try:
+            task = vb.get_task(name)
+            if task is None and hasattr(vb, 'load_task'):
+                task = vb.load_task(name)
+            return task or None
+        except Exception:
+            return None
+
+    def _visual_groups(self, task: dict):
+        """可视化任务变量组/常量组定义（按图内节点收集）"""
+        from visual import visual_schema as vs
+        try:
+            return vs.collect_var_groups(task.get("graph", {}))
+        except Exception:
+            return []
+
+    def _make_var_tab(self) -> QWidget:
+        """🔢 变量配置：变量组按组名分组显示输入框，初值=任务 param_values"""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(8)
+        self._var_inputs = {}
+        task = self._var_task or {}
+        groups = [g for g in self._visual_groups(task)
+                  if g.get("kind") != "constant_group"]
+        if not groups:
+            lab = QLabel("（该任务图中没有变量组节点——\n"
+                         "在可视化构建的节点库「变量」分类添加变量组并编辑变量）")
+            lab.setWordWrap(True)
+            lab.setStyleSheet("color:#8a94a6;padding:8px;")
+            lay.addWidget(lab)
+            lay.addStretch(1)
+            return page
+        from visual import visual_schema as vs
+        values = vs.effective_param_values(task)
+        # 可调用变量：运行值（跨运行保留）优先于 param_values 初值
+        if (self._visual_bridge is not None
+                and hasattr(self._visual_bridge, "callable_var_values")):
+            try:
+                values.update(self._visual_bridge.callable_var_values(
+                    self._current_name))
+            except Exception:
+                pass
+        for g in groups:
+            gb = QGroupBox(f"🔢 {g.get('group_name', '变量组')}")
+            gb.setStyleSheet(_VAR_GROUP_QSS)
+            glay = QVBoxLayout(gb)
+            glay.setSpacing(4)
+            for v in g.get("variables", []):
+                key = str(v.get("key", "") or "").strip()
+                label = str(v.get("label", "") or key)
+                row = QHBoxLayout()
+                lab = QLabel(label)
+                lab.setFixedWidth(140)
+                lab.setToolTip(f"变量键: {key}")
+                row.addWidget(lab)
+                if v.get("callable"):
+                    # 可调用变量：默认锁编辑，运行中实时刷新
+                    row.addWidget(self._make_callable_var_row(
+                        key, v.get("type", "text"), values.get(key)), 1)
+                else:
+                    wgt = self._make_var_input(key, v.get("type", "text"),
+                                               values.get(key))
+                    row.addWidget(wgt, 1)
+                    self._var_inputs[key] = wgt
+                glay.addLayout(row)
+            lay.addWidget(gb)
+        lay.addStretch(1)
+        return page
+
+    def _make_callable_var_row(self, key: str, vtype: str, value) -> QWidget:
+        """可调用变量行（2026-08-16）：值标签 + 隐藏编辑框 + 🔒/💾 切换。
+
+        默认锁编辑（显示实时值）；点 🔒 → 编辑框出现；改完点 💾 →
+        写入运行值文件（同步到任务）并回到锁态。
+        """
+        holder = QWidget()
+        h = QHBoxLayout(holder)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        text = "" if value is None else str(value)
+        val_lab = QLabel(text)
+        val_lab.setStyleSheet("color:#5aa9f0;font-weight:bold;")
+        edit = QLineEdit(text)
+        edit.hide()
+        btn = QPushButton("🔒")
+        btn.setFixedWidth(34)
+        btn.setToolTip("可调用变量：运行中由「参数处理」节点实时改变。\n"
+                       "点击解锁编辑，再次点击保存同步到任务。")
+
+        def _toggle():
+            if edit.isVisible():
+                # 保存：写入运行值文件（跨运行生效）
+                val = self._coerce_var_value(edit.text().strip(), vtype)
+                if (self._visual_bridge is not None
+                        and hasattr(self._visual_bridge, "set_callable_var")):
+                    try:
+                        self._visual_bridge.set_callable_var(
+                            self._current_name, key, val)
+                    except Exception:
+                        pass
+                val_lab.setText(str(val))
+                edit.hide()
+                val_lab.show()
+                btn.setText("🔒")
+                btn.setToolTip("可调用变量：运行中由「参数处理」节点实时改变。\n"
+                               "点击解锁编辑，再次点击保存同步到任务。")
+            else:
+                edit.setText(val_lab.text())
+                val_lab.hide()
+                edit.show()
+                edit.setFocus()
+                btn.setText("💾")
+                btn.setToolTip("编辑完成后点击保存")
+
+        btn.clicked.connect(_toggle)
+        h.addWidget(val_lab, 1)
+        h.addWidget(edit, 1)
+        h.addWidget(btn)
+        self._callable_display[key] = (val_lab, edit)
+        return holder
+
+    @staticmethod
+    def _coerce_var_value(txt: str, vtype: str):
+        """按变量类型转换手动编辑的文本"""
+        try:
+            if vtype == "int":
+                return int(float(txt))
+            if vtype == "float":
+                return float(txt)
+            if vtype == "bool":
+                return txt.strip().lower() in ("1", "true", "yes", "是")
+        except Exception:
+            pass
+        return txt
+
+    def _on_callable_changed(self, **kw) -> None:
+        """（后台线程）参数处理改变可调用变量 → 投递主线程更新显示"""
+        self._ui_signal.emit(lambda: self._ui_callable_changed(
+            kw.get("task_id", ""), kw.get("key", ""), kw.get("value")))
+
+    def _ui_callable_changed(self, task_id: str, key: str, value) -> None:
+        """（主线程）更新当前任务的可调用变量实时值"""
+        if not task_id or task_id != self._current_name:
+            return
+        widgets = self._callable_display.get(key)
+        if not widgets:
+            return
+        lab, edit = widgets
+        text = "" if value is None else str(value)
+        edit.setText(text)
+        if not edit.isVisible():
+            lab.setText(text)
+
+    # ══════ 常量展示（可视化任务专属，2026-08-16）══════
+
+    def _make_const_tab(self) -> QWidget:
+        """📌 常量展示：常量组按组名分组只读展示"""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(8)
+        task = self._var_task or {}
+        groups = [g for g in self._visual_groups(task)
+                  if g.get("kind") == "constant_group"]
+        if not groups:
+            lab = QLabel("（该任务图中没有常量组节点——\n"
+                         "在可视化构建的节点库「变量」分类添加常量组）")
+            lab.setWordWrap(True)
+            lab.setStyleSheet("color:#8a94a6;padding:8px;")
+            lay.addWidget(lab)
+            lay.addStretch(1)
+            return page
+        for g in groups:
+            gb = QGroupBox(f"📌 {g.get('group_name', '常量组')}（只读）")
+            gb.setStyleSheet(_VAR_GROUP_QSS)
+            glay = QVBoxLayout(gb)
+            glay.setSpacing(4)
+            for v in g.get("variables", []):
+                key = str(v.get("key", "") or "").strip()
+                label = str(v.get("label", "") or key)
+                row = QHBoxLayout()
+                lab = QLabel(label)
+                lab.setFixedWidth(140)
+                lab.setToolTip(f"常量键: {key}")
+                row.addWidget(lab)
+                val_lab = QLabel(str(v.get("value", "")))
+                val_lab.setStyleSheet("color:#5aa9f0;font-weight:bold;")
+                row.addWidget(val_lab)
+                row.addStretch(1)
+                glay.addLayout(row)
+            lay.addWidget(gb)
+        lay.addStretch(1)
+        return page
+
+    def _make_var_input(self, key: str, vtype: str, value):
+        """按变量类型创建输入控件（int/float/bool/text）"""
+        if vtype == "int":
+            w = QSpinBox()
+            w.setRange(-999999, 999999)
+            try:
+                w.setValue(int(float(value)))
+            except Exception:
+                w.setValue(0)
+        elif vtype == "float":
+            from PyQt5.QtWidgets import QDoubleSpinBox
+            w = QDoubleSpinBox()
+            w.setRange(-1e9, 1e9)
+            w.setDecimals(3)
+            try:
+                w.setValue(float(value))
+            except Exception:
+                w.setValue(0.0)
+        elif vtype == "bool":
+            w = QCheckBox()
+            try:
+                w.setChecked(str(value).strip().lower()
+                             in ("1", "true", "yes", "是"))
+            except Exception:
+                w.setChecked(False)
+        else:
+            w = QLineEdit("" if value is None else str(value))
+        w.setToolTip(f"变量键: {key}（其它节点用 ${{{key}}} 引用）")
+        return w
+
+    def _collect_var_inputs(self) -> dict:
+        """收集变量配置 tab 当前输入（变量键 → 值）"""
+        from PyQt5.QtWidgets import QDoubleSpinBox
+        out: dict = {}
+        for key, w in self._var_inputs.items():
+            if isinstance(w, QSpinBox):
+                out[key] = w.value()
+            elif isinstance(w, QDoubleSpinBox):
+                out[key] = w.value()
+            elif isinstance(w, QCheckBox):
+                out[key] = w.isChecked()
+            elif isinstance(w, QLineEdit):
+                out[key] = w.text().strip()
+        return out
+
+    def _save_var_inputs(self) -> None:
+        """变量配置输入 → 写回可视化任务 param_values"""
+        vb = self._visual_bridge
+        if vb is None or self._var_task is None or not self._var_inputs:
+            return
+        name = self._var_task.get("name", "") or self._current_name
+        try:
+            task = vb.load_task(name)
+        except Exception:
+            return
+        if not task:
+            return
+        task["param_values"] = self._collect_var_inputs()
+        try:
+            vb.save_task(task)
+        except Exception:
+            pass
 
     # ── 执行时段动态行 ────────────────────────────────────────
 
@@ -623,36 +776,6 @@ class GameTaskPanel(QWidget):
         self._update_repeat_fields()
 
     # ── 重复规则联动（下拉选框）─────────────────────────
-
-    def _refresh_cycle_done(self) -> None:
-        """刷新「活动循环次数」累计显示（已循环 x/y 轮）。
-
-        从调度器读取活动循环累计进度（record_cycle 每轮循环 +1），
-        显示在活动循环次数输入框右侧；未设置上限时仅显示累计值。
-        """
-        if not self._current_name:
-            return
-        w = self._form_widgets
-        lbl = w.get("cycle_done_label")
-        if lbl is None:
-            return
-        bridge = self._param_bridge
-        cur, limit = 0, None
-        if bridge and hasattr(bridge, 'task') and hasattr(bridge.task, 'get_cycle_progress'):
-            try:
-                cur, limit = bridge.task.get_cycle_progress(self._current_name)
-            except Exception:
-                cur, limit = 0, None
-        if limit is not None:
-            lbl.setText(f"已循环 {cur}/{limit} 轮")
-            lbl.setStyleSheet("color:#888; font-size:12px;")
-            if cur >= limit:
-                lbl.setStyleSheet("color:#e53935; font-size:12px;")
-        elif cur:
-            lbl.setText(f"已循环 {cur} 轮")
-            lbl.setStyleSheet("color:#888; font-size:12px;")
-        else:
-            lbl.setText("")
 
     def _current_repeat_type(self) -> str:
         """当前选中的重复规则类型（下拉选框）"""
@@ -732,12 +855,14 @@ class GameTaskPanel(QWidget):
     # ── 保存（设计书 §5.1 字段写回 tasks.yaml） ────────────
 
     def _collect_config(self) -> dict[str, Any]:
-        """收集表单值 → tasks.yaml 配置 dict"""
+        """收集表单值 → tasks.yaml 配置 dict
+
+        ⚠️ 2026-08-16：「循环次数」(loop_count) 与「战斗配置」已由变量组/常量组
+        承载，UI 不再写入（tasks.yaml 旧字段保留兼容，不主动覆盖）。
+        """
         w = self._form_widgets
         rtype = self._current_repeat_type()
         repeat_dict: dict[str, Any] = {"type": rtype, "value": 1}
-        # 每轮循环也写入 repeat（调度器优先读取 repeat.loop_count）
-        repeat_dict["loop_count"] = w["loop_count"].value()
         if rtype in ("interval_days", "interval_hours"):
             repeat_dict["value"] = w["interval"].value()
         elif rtype == "weekly":
@@ -760,7 +885,8 @@ class GameTaskPanel(QWidget):
         no_schedule = rtype in ("trigger", "on_enter", "once")
         if no_schedule:
             # 触发式任务：识别列表写入 repeat.trigger_templates，时间字段全部置空
-            # 输入为 MultiSelectCombo（信号名多选）或 QLineEdit（旧文本输入）两种形态
+            # 输入为 MultiSelectCombo（信号名多选）或 QLineEdit（旧文本输入）两种形态；
+            # 2026-08-16 退役后不再渲染触发控件 → 留存旧值（不丢字段）
             templates = []
             if is_trigger:
                 tt = w.get("trigger_templates")
@@ -770,6 +896,9 @@ class GameTaskPanel(QWidget):
                         templates = [str(d) for d in tt.selected_data()]
                     else:
                         templates = [t.strip() for t in tt.text().split(",") if t.strip()]
+                else:
+                    templates = list(getattr(self, "_legacy_trigger_templates",
+                                             []) or [])
             if templates:
                 repeat_dict["trigger_templates"] = templates
             time_start, time_end, time_slots = None, None, None
@@ -797,47 +926,9 @@ class GameTaskPanel(QWidget):
             "max_daily": (w["max_daily"].value() or None),  # 周期触发次数（所有类型）
             "repeat": repeat_dict,  # loop_count 只存 repeat 内（scheduler 优先读取），顶层不再重复存储
             "active_range": None if is_trigger else active_range,
-            "total_count": (w["total_count"].value() or None),  # 活动循环次数（所有类型，含 trigger）
         }
         if "max_fail_streak" in w:
             config["max_fail_streak"] = w["max_fail_streak"].value()
-        if "team_id" in w:
-            config["team_id"] = w["team_id"].text().strip() or None
-        if "floor" in w:
-            config["floor"] = w["floor"].value() or None
-        if "stamina_required" in w:
-            config["stamina_required"] = w["stamina_required"].value()
-
-        # ── 战斗配置（战斗配置 Tab，uses_battle=True 时） ──
-        if getattr(self, "_uses_battle", False):
-            # 御魂配置：组名 / 队伍名 / 位置 [分组序号, 队伍序号]
-            if "soul_group" in w:
-                config["soul_setup"] = {
-                    "group": w["soul_group"].text().strip(),
-                    "team": w["soul_team"].text().strip() if "soul_team" in w else "",
-                    "position": [
-                        w["soul_pos_group"].value() if "soul_pos_group" in w else 1,
-                        w["soul_pos_team"].value() if "soul_pos_team" in w else 1,
-                    ],
-                }
-            # 战前准备：是否锁定 / 是否更换队伍
-            if "lock_team" in w:
-                config["lock_team"] = w["lock_team"].isChecked()
-            if "change_team" in w:
-                config["change_team"] = w["change_team"].isChecked()
-            # 组队配置（主号带队带小号刷副本，§3.10）
-            # 轮数复用「每轮循环」（loop_count），teaming 只存小号列表
-            if "teaming_sub_ids" in w:
-                wid = w["teaming_sub_ids"]
-                from ui.widgets.multi_select_combo import MultiSelectCombo
-                if isinstance(wid, MultiSelectCombo):
-                    subs = wid.selected_data()
-                else:
-                    subs = [s.strip() for s in wid.text().split(",") if s.strip()]
-                if subs:
-                    config["teaming"] = {"sub_ids": subs}
-                else:
-                    config["teaming"] = None
         return config
 
     def _save(self) -> None:
@@ -892,8 +983,8 @@ class GameTaskPanel(QWidget):
                 self._show_status(f"✅ 已保存 · 下次执行: {nrt}")
             else:
                 self._show_status("✅ 配置已保存")
-            # 保存后刷新累计循环次数显示
-            self._refresh_cycle_done()
+            # 可视化任务：变量配置输入写回任务 param_values
+            self._save_var_inputs()
         except Exception:
             self._show_status("保存失败")
 

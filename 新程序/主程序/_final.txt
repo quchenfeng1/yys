@@ -1,0 +1,6 @@
+PASS    1.3s  verify_interrupt_handling.py  🎉 停止中断/异常失败处理验证 15 项通过
+总耗时 67.3s  |  通过 67  失败 2
+---
+FAIL    5.8s  verify_signal.py  FileNotFoundError: [WinError 2] 系统找不到指定的文件。: 'C:\\Users\\q\\AppData\\Local\\Temp\\signal_s5xo9mms\\assets\\scene\\战斗界面.png'
+PASS    0.6s  verify_visual_scene_save.py  2026-08-16 09:11:45.893 | ERROR    | ui.visual_builder.visual_builder_panel:_on_scene_committed:381 - [场景保存] 主界面: 素材库写入失败（未配置素材库目录）
+FAIL    0.2s  verify_asset_meta.py  AttributeError: 'NoneType' object has no attribute 'text'

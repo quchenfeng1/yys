@@ -30,7 +30,6 @@ KNOWN_BROKEN = {"verify_theme_preview.py"}
 # --fast 快速回归时跳过（只跑轻量逻辑校验，~15s）
 KNOWN_SLOW = {
     "verify_combat_test_log.py",
-    "verify_coop_flow.py",
     "verify_once_test.py",
     "verify_task_images.py",
 }
@@ -47,6 +46,7 @@ def _env() -> dict:
     if os.path.isdir(plugin):
         env["QT_PLUGIN_PATH"] = plugin
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"   # Windows 下子进程输出统一 UTF-8
     return env
 
 
@@ -56,6 +56,7 @@ def _run_one(path: str) -> tuple[str, int, float, str]:
     try:
         p = subprocess.run(
             [sys.executable, path], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=SCRIPT_TIMEOUT, cwd=PROJ, env=_env())
         rc, out = p.returncode, (p.stdout + p.stderr)
     except subprocess.TimeoutExpired:
@@ -67,6 +68,9 @@ def _run_one(path: str) -> tuple[str, int, float, str]:
 
 
 def main() -> int:
+    # Windows GBK 控制台下打印 emoji 会 UnicodeEncodeError，统一 UTF-8
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = [a for a in sys.argv[1:]]
     workers = None
     include_broken = "--all" in args

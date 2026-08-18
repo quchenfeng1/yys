@@ -46,9 +46,6 @@ class StateKeys:
     SUB_ACCOUNT_FINDINGS: Final[str] = "sub_account_findings"  # dict[str, list[Finding]]
     BEST_FINDING: Final[str] = "best_finding"             # Finding | None
 
-    # ── 执行历史 execution ──────────────────────────────────
-    EXECUTION_HISTORY: Final[str] = "execution_history"   # 执行历史列表
-
     # ── 运行时段 run_window ─────────────────────────────────
     RUN_WINDOW: Final[str] = "run_window"                 # tuple[str, str]
     SCHEDULED_START: Final[str] = "scheduled_start"       # str | None

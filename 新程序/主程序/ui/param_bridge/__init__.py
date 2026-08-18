@@ -21,6 +21,7 @@ from core.events import Events
 from ui.param_bridge.account_bridge import AccountBridge
 from ui.param_bridge.config_bridge import ConfigBridge
 from ui.param_bridge.run_bridge import RunBridge
+from ui.param_bridge.system_bridge import SystemBridge
 from ui.param_bridge.task_bridge import TaskBridge
 from ui.param_bridge.ui_binding import UIBinding
 from ui.param_bridge.schemas import (
@@ -54,6 +55,7 @@ class ParamBridge:
         self.account = AccountBridge(account_manager)
         self.config = ConfigBridge(config)
         self.run = RunBridge(event_bus=self._event_bus, controller=run_controller)
+        self.system = SystemBridge(event_bus=self._event_bus)
         self.task = TaskBridge(
             registry=registry,
             scheduler=scheduler,
@@ -83,6 +85,7 @@ class ParamBridge:
             "account": self.account,
             "config": self.config,
             "run": self.run,
+            "system": self.system,
             "task": self.task,
             "ui": self.ui,
         }
@@ -93,6 +96,7 @@ __all__ = [
     "AccountBridge",
     "ConfigBridge",
     "RunBridge",
+    "SystemBridge",
     "TaskBridge",
     "UIBinding",
     "ParamSchema",

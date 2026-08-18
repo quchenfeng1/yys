@@ -1,0 +1,9 @@
+# 模拟器条目库（2026-08-16）
+# 全局共享：所有窗口可见；「模拟器管理」菜单可增删改。
+# serial = host:port，切换模拟器时直接连接，不做端口扫描。
+emulators:
+  - id: emu_1
+    name: 默认模拟器
+    host: 127.0.0.1
+    port: 5557
+    remark: 来自 global.yaml 的默认设备地址

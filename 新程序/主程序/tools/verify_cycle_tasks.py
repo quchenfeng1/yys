@@ -74,12 +74,17 @@ def main():
         runtime_progress_path=tmpdir / "progress.json",
     )
 
-    # ① _on_task_progress 记录 cycle_date
-    ctrl._on_task_progress("daily_x", 20, 100)
+    # ① _on_task_progress 已退役（2026-08-16）：BattleLoop 随老任务删除，
+    #    进度改由 ProgressTracker + VISUAL_PROGRESS 缩略图体系承担，
+    #    保留空壳仅兼容旧代码引用（调用无效果）
+    progress = sm.get_state("task_runtime_progress", {})
+    progress["daily_x"] = {"completed": 20, "total": 100,
+                           "cycle_date": datetime.now().strftime("%Y-%m-%d")}
+    sm.set_state("task_runtime_progress", progress)
+    ctrl._on_task_progress("daily_x", 30, 100)   # 退役空操作
     entry = sm.get_state("task_runtime_progress", {}).get("daily_x", {})
-    check("① 进度带 cycle_date", entry.get("completed") == 20
-          and entry.get("cycle_date") == datetime.now().strftime("%Y-%m-%d"),
-          str(entry))
+    check("① _on_task_progress 退役空操作（不写进度）",
+          entry.get("completed") == 20, str(entry))
 
     # ② _update_task_progress 保留周期进度（不清 0）
     ctrl._update_task_progress("daily_x", True)
@@ -97,7 +102,10 @@ def main():
           str(entry))
 
     # ④ 改配置重置
-    ctrl._on_task_progress("daily_x", 50, 100)
+    progress = sm.get_state("task_runtime_progress", {})
+    progress["daily_x"] = {"completed": 50, "total": 100,
+                           "cycle_date": datetime.now().strftime("%Y-%m-%d")}
+    sm.set_state("task_runtime_progress", progress)
     ctrl.reset_task_cycle("daily_x")
     entry = sm.get_state("task_runtime_progress", {}).get("daily_x", {})
     check("④ 改配置重置 completed=0", entry.get("completed") == 0, str(entry))

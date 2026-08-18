@@ -12,7 +12,7 @@ from typing import Any, Callable
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QProgressBar, QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
 # 优先级色阶（11-用户界面模块 §3.2）
@@ -128,10 +128,23 @@ class TaskQueuePanel(QWidget):
 
     # 手动触发触发式任务（trigger）——由 MainWindow 连接 TaskBridge.update_next_run
     manual_trigger_requested = pyqtSignal(str)
+    # 后台线程事件 → 主线程 UI 更新（执行进度实时同步，2026-08-16）
+    _ui_signal = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_PANEL_QSS)
+        self._ui_signal.connect(lambda fn: fn())
+        self._last_current: str | None = None
+        self._progress_cache: dict[str, dict] = {}   # 任务 → 最近进度快照
+        # 执行进度事件订阅（可视化任务 ProgressTracker 发布）
+        try:
+            from core.event_bus import get_global_bus
+            from core.events import Events
+            get_global_bus().subscribe(Events.VISUAL_PROGRESS,
+                                       self._on_visual_progress)
+        except Exception:
+            pass
         layout = QVBoxLayout(self)
         layout.setSpacing(6)
         # ── 面板标题（普通嵌入标签，与其他面板一致） ──
@@ -148,6 +161,13 @@ class TaskQueuePanel(QWidget):
             "font-size:16px; font-weight:bold; color:#2e7d32; padding:6px;")
         self.current_label.setWordWrap(True)
         cur_layout.addWidget(self.current_label)
+        # 暂停中任务（2026-08-16 信号体系）：等待信号/超时的挂起任务
+        self.paused_label = QLabel("")
+        self.paused_label.setStyleSheet(
+            "color:#e65100; font-size:12px; padding:2px 6px;")
+        self.paused_label.setWordWrap(True)
+        self.paused_label.setVisible(False)
+        cur_layout.addWidget(self.paused_label)
         layout.addWidget(current_frame)
 
         # ── 下方：待执行 / 未开始 / 已失效（三栏卡片列表） ──
@@ -162,6 +182,16 @@ class TaskQueuePanel(QWidget):
         self.pending_list.setSpacing(2)
         ll.addWidget(self.pending_list)
         splitter.addWidget(left_box)
+
+        # 待触发（2026-08-16 信号体系：含任务信号触发器节点的任务，
+        # 到期后不进待执行，等待任务信号激活）
+        trigger_box, tl = panel_group("📡 待触发")
+        tl.setSpacing(2)
+        tl.setContentsMargins(6, 2, 6, 6)
+        self.trigger_list = QListWidget()
+        self.trigger_list.setSpacing(2)
+        tl.addWidget(self.trigger_list)
+        splitter.addWidget(trigger_box)
 
         # 中：未开始（容器框）
         middle_box, ml = panel_group("🕐 未开始")
@@ -184,22 +214,116 @@ class TaskQueuePanel(QWidget):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 1)
+        splitter.setStretchFactor(3, 1)
         layout.addWidget(splitter, 1)
 
-        # 总体进度
-        layout.addWidget(QLabel("总体进度"))
-        self.progress_bar = QProgressBar()
-        layout.addWidget(self.progress_bar)
+        # ── 当前步骤 + 执行进度抽屉（2026-08-16 替换「总体进度」条） ──
+        step_row = QHBoxLayout()
+        step_row.setSpacing(8)
+        step_row.addWidget(QLabel("当前步骤"))
+        self.step_label = QLabel("无")
+        self.step_label.setStyleSheet(
+            "font-size:12px; font-weight:bold; color:#1565c0;")
+        self.step_label.setWordWrap(True)
+        step_row.addWidget(self.step_label, 1)
+        self.drawer_btn = QPushButton("🔽 进度图")
+        self.drawer_btn.setCheckable(True)
+        self.drawer_btn.setChecked(False)   # 默认收起（只显示转圈+进度字段）
+        self.drawer_btn.setCursor(Qt.PointingHandCursor)
+        self.drawer_btn.clicked.connect(self._on_drawer_toggled)
+        step_row.addWidget(self.drawer_btn)
+        layout.addLayout(step_row)
 
-    # ── 四区更新（MainWindow 调用） ───────────────────────
+        # 收起态：蓝色转圈小图标 + 当前进度字段
+        from ui.panels.progress_thumb import ProgressThumb, SpinningDot
+        self.collapsed_row = QWidget()
+        cr = QHBoxLayout(self.collapsed_row)
+        cr.setContentsMargins(0, 0, 0, 0)
+        cr.setSpacing(8)
+        self.spinner = SpinningDot(12)
+        self.spinner.setVisible(False)   # 有步骤时才显示转圈（2026-08-16）
+        self.progress_summary = QLabel("")
+        self.progress_summary.setStyleSheet("color:#666; font-size:12px;")
+        cr.addWidget(self.spinner)
+        cr.addWidget(self.progress_summary, 1)
+        layout.addWidget(self.collapsed_row)
+
+        # 展开态：进度图（o-o-o 缩略图，蓝箭头=游标路径）
+        self.thumb = ProgressThumb()
+        layout.addWidget(self.thumb)
+        self._on_drawer_toggled()
+
+    # ── 执行进度抽屉（2026-08-16）──────────────────────
+
+    def _on_drawer_toggled(self) -> None:
+        """抽屉：展开显示进度图；收起只显示转圈图标 + 当前进度字段"""
+        expanded = self.drawer_btn.isChecked()
+        self.thumb.setVisible(expanded)
+        self.collapsed_row.setVisible(not expanded)
+        self.drawer_btn.setText("🔼 进度图" if expanded else "🔽 进度图")
+
+    def _on_visual_progress(self, **kw) -> None:
+        """（后台线程）进度快照 → 缓存 + 投递主线程"""
+        try:
+            task_id = kw.get("task_id", "")
+            snap = {k: kw[k] for k in
+                    ("task_id", "current", "points", "states", "edges")
+                    if k in kw}
+            if not task_id:
+                return
+            self._progress_cache[task_id] = snap
+            self._ui_signal.emit(lambda: self._apply_snapshot(snap))
+        except Exception:
+            pass
+
+    def _apply_snapshot(self, snap: dict) -> None:
+        """（主线程）当前任务快照 → 步骤名 / 进度字段 / 转圈 / 进度图"""
+        if snap.get("task_id") != self._last_current:
+            return
+        points = snap.get("points") or []
+        states = snap.get("states") or {}
+        done = sum(1 for p in points if states.get(p["id"]) == "green")
+        running = any(states.get(p["id"]) == "blue" for p in points)
+        failed = any(states.get(p["id"]) == "red" for p in points)
+        cur = snap.get("current") or ""
+        self.step_label.setText(cur or "无")
+        # 转圈图标：有步骤才显示；运行中旋转（2026-08-16）
+        self.spinner.setVisible(bool(cur))
+        self.spinner.set_spinning(bool(cur and running and not failed))
+        if points:
+            text = f"进度 {done}/{len(points)}"
+            if failed:
+                text += "（失败）"
+            self.progress_summary.setText(text)
+        else:
+            self.progress_summary.setText("")
+        self.thumb.update_snapshot(snap)
+
+    def _reset_progress_view(self, task: str) -> None:
+        """切换任务：清空/回显该任务的进度视图"""
+        self.step_label.setText("无")
+        self.progress_summary.setText("")
+        self.spinner.setVisible(False)
+        self.spinner.set_spinning(False)
+        cached = self._progress_cache.get(task)
+        if cached:
+            self._apply_snapshot(cached)
+        else:
+            self.thumb.update_snapshot(None)
+
+    # ── 五区更新（MainWindow 调用） ───────────────────────
 
     def update_panel(self, current: str | None, pending: list,
-                     upcoming: list[dict[str, Any]], invalid: list | None = None) -> None:
-        """一次性更新四区：正在执行 / 待执行 / 未开始 / 已失效"""
+                     upcoming: list[dict[str, Any]], invalid: list | None = None,
+                     trigger: list | None = None,
+                     paused: list | None = None) -> None:
+        """一次性更新各区：正在执行 / 待执行 / 待触发 / 未开始 / 已失效"""
         self._set_current(current or "")
         self._set_pending(pending)
+        self._set_trigger(trigger or [])
         self._set_upcoming(upcoming)
         self._set_invalid(invalid or [])
+        self._set_paused(paused or [])
 
     # ── 卡片渲染辅助 ─────────────────────────────────────
 
@@ -271,6 +395,10 @@ class TaskQueuePanel(QWidget):
             self.current_label.setText("（无）")
             self.current_label.setStyleSheet(
                 "font-size:15px; color:#aaa; padding:6px;")
+        # 任务切换 → 重置执行进度视图（2026-08-16）
+        if task != self._last_current:
+            self._last_current = task
+            self._reset_progress_view(task)
 
     def _set_pending(self, pending: list) -> None:
         self.pending_list.clear()
@@ -288,6 +416,52 @@ class TaskQueuePanel(QWidget):
                 )
             else:
                 self._add_card(self.pending_list, title=str(item))
+
+    def _set_trigger(self, trigger: list) -> None:
+        """待触发区（2026-08-16 信号体系）：等待任务信号的触发任务"""
+        self.trigger_list.clear()
+        for item in trigger:
+            if isinstance(item, dict):
+                name = item.get("name", "")
+                nrt = item.get("next_run", "")
+                pri = item.get("priority")
+                sub = f"⏱ {nrt}" if nrt else "等待任务信号"
+                self._add_card(
+                    self.trigger_list, title=f"📡 {name}", sub=sub,
+                    badge_text="待触发", badge_color="#1e88e5",
+                )
+                _ = pri
+            else:
+                self._add_card(self.trigger_list, title=str(item))
+
+    def _set_paused(self, paused: list) -> None:
+        """暂停展示（2026-08-16 信号体系）：正在执行区下的挂起任务"""
+        if not paused:
+            self.paused_label.setText("")
+            self.paused_label.setVisible(False)
+            return
+        parts = []
+        for rec in paused:
+            if not isinstance(rec, dict):
+                continue
+            name = rec.get("name", "")
+            if not name:
+                continue
+            if rec.get("active"):
+                parts.append(f"⏳ {name}（继续执行中）")
+            elif rec.get("ready"):
+                parts.append(f"⏸ {name}（待唤醒：超时/信号已到）")
+            else:
+                sig = rec.get("signal") or "信号"
+                secs = rec.get("seconds")
+                tail = f" · {int(secs)}s" if secs else ""
+                parts.append(f"⏸ {name}（等待 {sig}{tail}）")
+        if not parts:
+            self.paused_label.setText("")
+            self.paused_label.setVisible(False)
+            return
+        self.paused_label.setText("   |   ".join(parts))
+        self.paused_label.setVisible(True)
 
     def _set_upcoming(self, upcoming: list) -> None:
         self.upcoming_list.clear()
@@ -321,11 +495,11 @@ class TaskQueuePanel(QWidget):
 
     def clear(self) -> None:
         self.pending_list.clear()
+        self.trigger_list.clear()
         self.upcoming_list.clear()
         self.invalid_list.clear()
-
-    def set_progress(self, value: int) -> None:
-        self.progress_bar.setValue(value)
+        self.paused_label.setText("")
+        self.paused_label.setVisible(False)
 
     def on_task_started(self, task_id: str) -> None:
         """任务开始执行 → 上方显示当前任务"""

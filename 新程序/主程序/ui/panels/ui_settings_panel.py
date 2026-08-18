@@ -21,8 +21,10 @@ _PANEL_TOGGLE_ITEMS = [
     ("task_queue", "任务队列", True),
     ("task_manager", "任务管理", True),
     ("image", "素材管理", True),
-    ("accounts", "小号管理", True),
-    ("history", "执行历史", True),
+    ("accounts", "账号管理", True),
+    ("emulators", "模拟器管理", True),
+    ("signals", "信号管理", True),
+    ("anomalies", "异常任务", True),
 ]
 
 

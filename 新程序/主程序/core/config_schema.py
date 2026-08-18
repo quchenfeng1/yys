@@ -68,6 +68,17 @@ class ScheduleConfig:
 
 
 @dataclass
+class AnomalyConfig:
+    """异常检测配置（2026-08-16 信号体系）
+
+    异常判定：{场景判断器(节点 id), 场景信号} 连续 count 次相同 → 异常；
+    window 秒内连续识别到同一场景信号 count 次 → 也为异常。
+    """
+    count: int = 5
+    window: int = 30
+
+
+@dataclass
 class LogConfig:
     """日志配置"""
     level: str = "INFO"
@@ -96,6 +107,7 @@ class GlobalConfig:
     image: ImageRecognitionConfig = field(default_factory=ImageRecognitionConfig)
     anti_detect: AntiDetectConfig = field(default_factory=AntiDetectConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+    anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
 

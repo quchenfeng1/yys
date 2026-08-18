@@ -2,6 +2,45 @@ _version: 1
 device:
   adb:
     host: 127.0.0.1
-    port: 5037
+    port: 5557
     timeout: 30.0
-  mock: true
+    max_retries: 3
+    retry_delay: 2.0
+  mock: false
+  screenshot:
+    method: adb
+    quality: 80
+    resize_ratio: 1.0
+    cache: true
+    cache_ttl: 0.5
+  emulator_path: ''
+  emulator_name: ''
+image:
+  template_threshold: 0.8
+  ocr_enabled: true
+  ocr_timeout: 10
+  ocr_use_gpu: false
+  match_method: cv2.TM_CCOEFF_NORMED
+anti_detect:
+  enabled: true
+  min_interval: 1.0
+  max_interval: 5.0
+  action_jitter: true
+  mouse_simulation: true
+  random_fail_rate: 0.02
+  behavior_profile: true
+  weekly_off_day: ''
+anomaly:
+  count: 5
+  window: 30
+schedule:
+  enabled: false
+  timezone: Asia/Shanghai
+  crontab: ''
+log:
+  level: INFO
+  dir: logs
+  rotation: 10 MB
+  retention: 30 days
+  console: true
+  structured: false

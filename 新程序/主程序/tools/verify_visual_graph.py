@@ -179,8 +179,8 @@ def test_login_loop_random_click():
     loop["params"] = {"mode": "直到条件", "count": 60, "condition": "login == 1"}
     sp = vs.new_node("scene_probe", name="识别登录")
     sp["params"] = {"scene": "login", "timeout": 1, "output_var": "login"}
-    cl = vs.new_node("clicker", name="随机点击")
-    cl["params"] = {"mode": "随机点", "point": "", "offset": 0}
+    cl = vs.new_node("clicker", name="点击加载按钮")
+    cl["params"] = {"template": "red.png"}
     end = vs.new_node("end", name="结束")
     graph["nodes"] = [start, loop, sp, cl, end]
     graph["connections"] = [
@@ -191,6 +191,13 @@ def test_login_loop_random_click():
         vs.new_connection(loop["id"], "loop_back", cl["id"], "out"),
         vs.new_connection(end["id"], "in", loop["id"], "done"),
     ]
+    # 点击器图标素材：屏幕左上角红块
+    import cv2
+    import numpy as np
+    cv2.imwrite(str(tmp / "red.png"),
+                np.full((40, 40, 3), 255, np.uint8))
+    screen = np.zeros((1920, 1080, 3), np.uint8)
+    screen[:40, :40] = 255
     store.save(task)
     state = {"n": 0}
 
@@ -202,7 +209,9 @@ def test_login_loop_random_click():
 
     vn._judge_scene = fake_judge
     ex = _FakeExecutor()
-    ctx = GraphContext(task=task, executor=ex, screen_size=(1080, 1920))
+    ex._recognizer = type("R", (), {"_get_screenshot": lambda s: screen})()
+    ctx = GraphContext(task=task, executor=ex, assets_dir=tmp,
+                       screen_size=(1080, 1920))
     r = run_graph(task["graph"], ctx)
     print(f"登录循环: status={r.status} login={ctx.vars.get('login')} "
           f"随机点击={len(ex.clicks)}次 判定={state['n']}次")
@@ -210,7 +219,7 @@ def test_login_loop_random_click():
     assert ctx.vars.get("login") == "1"
     assert len(ex.clicks) == 2, f"应随机点击 2 次，实际 {len(ex.clicks)}"
     for (x, y) in ex.clicks:
-        assert 0 <= x < 1080 and 0 <= y < 1920, f"随机点越界: {x},{y}"
+        assert 0 <= x < 40 and 0 <= y < 40, f"应点在图标遮罩内: {x},{y}"
     print("  ✅ 动画期间随机点击直到登录界面出现，命中后继续往下")
 
 

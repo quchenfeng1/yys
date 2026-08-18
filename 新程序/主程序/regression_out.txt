@@ -1,34 +1,77 @@
-PASS  tools/verify_account_manage.py  🎉 小号管理添加功能验证 25/25 通过
-PASS  tools/verify_asset_catalog.py  🎉 任务图片关联验证 3/3 通过
-PASS  tools/verify_asset_meta.py  🎉 素材标签系统验证 27/27 通过
-PASS  tools/verify_battle_tab.py  🎉 UI 双 Tab 战斗配置验证 3/3 通过
-PASS  tools/verify_button_fixes.py  🎉 按钮功能修复验证 30/30 通过
-PASS  tools/verify_combat_test_log.py  
-PASS  tools/verify_config_form.py  🎉 配置表单链路全部通过！
-PASS  tools/verify_coop_flow.py  🎉 组队协调验证 17/17 通过
-PASS  tools/verify_daily_once.py  🎉 daily 积压修复验证 4/4 通过
-PASS  tools/verify_daily_test_log.py  
-PASS  tools/verify_doc_task_flow.py  🎉 端到端识图任务验证 27/27 通过
-PASS  tools/verify_log_drawer.py  🎉 日志抽屉验证 4/4 通过
-PASS  tools/verify_material_preview.py  
-PASS  tools/verify_no_assets.py  🎉 全部通过！核心逻辑完整可用（无真实素材/设备）。
-PASS  tools/verify_once_test.py  🎉 once_test 四步链路 + on_enter 语义 + 触发识图任务验证 8/8 通过
-PASS  tools/verify_pending_excludes_current.py  🎉 待执行区排除执行中任务验证 3/3 通过
-PASS  tools/verify_queue_panel.py  🎉 TaskQueuePanel 卡片样式验证 3/3 通过
-PASS  tools/verify_requeue_fix.py  🎉 重复入队修复验证 4/4 通过
-PASS  tools/verify_scene_awareness.py  🎉 场景感知验证 6/6 通过
-PASS  tools/verify_signal.py  🎉 识图信号机制验证 17/17 通过
-PASS  tools/verify_sub_multiselect.py  🎉 组队小号多选下拉验证 15/15 通过
-PASS  tools/verify_task_chain.py  🎉 设计书任务链全部通过！
-Traceback (most recent call last):
-  File "/Users/mac/quproject1/yys/新程序/主程序/tools/_run_regression.py", line 6, in <module>
-    p = subprocess.run([sys.executable, f], capture_output=True, text=True, timeout=300)
-  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 507, in run
-    stdout, stderr = process.communicate(input, timeout=timeout)
-  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 1134, in communicate
-    stdout, stderr = self._communicate(input, endtime, timeout)
-  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 1979, in _communicate
-    ready = selector.select(timeout)
-  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/selectors.py", line 416, in select
-    fd_event_list = self._selector.poll(timeout)
-KeyboardInterrupt
+🧪 全量回归（并行 1 进程）共 73 个脚本（快速模式，跳过完整执行脚本）…
+PASS    7.8s  verify_pause_chain.py  🎉 暂停按钮调用链路验证 25 项通过
+PASS    5.8s  verify_no_assets.py  🎉 全部通过！核心逻辑完整可用（无真实素材/设备）。
+FAIL    5.8s  verify_signal.py  FileNotFoundError: [WinError 2] 系统找不到指定的文件。: 'C:\\Users\\q\\AppData\\Local\\Temp\\signal_57hbfun7\\assets\\scene\\战斗界面.png'
+PASS    4.4s  verify_stop_chain.py  WARNING:root:状态键 'task_runtime_progress' 的 set_state 收到了与旧值相同的对象引用，可能通过 get_state 直接修改了可变对象
+PASS    4.3s  verify_stop_next_run.py  第5次失败: fail_streak=5  status=skipped  冷却≈10分钟
+PASS    4.1s  verify_scene_awareness.py  🎉 场景感知验证 6/6 通过
+PASS    3.5s  verify_game_emulator_switch.py  [32m08-16 20:34:06[0m |[1m  INFO  [0m|    root    |[1m[16-应用启动引导] 已切换游戏: 阴阳师（yys）[0m
+PASS    3.3s  verify_visual_step.py  🎉 verify_visual_step 全部通过
+PASS    2.4s  verify_anti_detect_active.py  PASS  E2 失败率1→必失败
+PASS    2.4s  verify_trigger.py  🎉 trigger 全链路验证 7/7 通过
+PASS    1.7s  verify_signal_nodes.py  TOTAL 33/33
+PASS    1.5s  verify_start_chain.py  🎉 启动按钮调用链路验证 29 项通过
+PASS    1.3s  verify_button_fixes.py  🎉 按钮功能修复验证 32/32 通过
+PASS    0.7s  verify_trigger_tasks.py  🎉 trigger 特殊任务语义验证 4/4 通过
+PASS    0.6s  verify_ui_glue.py  🎉 UI 胶水链路验证 26 项通过
+PASS    0.6s  verify_visual_graph.py  🎉 节点图执行器核心逻辑全部通过
+PASS    0.5s  verify_visual_scene_save.py  2026-08-16 20:34:57.000 | ERROR    | ui.visual_builder.visual_builder_panel:_on_scene_committed:362 - [场景保存] 主界面: 素材库写入失败（未配置素材库目录）
+PASS    0.5s  verify_visual_open_dialog.py  🎉 打开任务弹窗 + 封装验证通过
+PASS    0.5s  verify_visual_ui.py  🎉 可视化构建 UI 冒烟全部通过
+PASS    0.5s  verify_visual_exclusion.py  🎉 verify_visual_exclusion 全部通过
+PASS    0.5s  verify_material_dialog.py  🎉 verify_material_dialog 全部通过
+PASS    0.4s  verify_visual_combo_popup.py  🎉 节点下拉控件全部验证通过
+PASS    0.4s  verify_visual_game_switch.py  🎉 游戏下拉切换验证通过
+PASS    0.4s  verify_visual_theme.py  🎉 节点内嵌控件主题统一验证通过
+PASS    0.4s  verify_visual_backdrop.py  🎉 Backdrop 移除验证通过
+PASS    0.4s  verify_visual_scene_combo.py  🎉 场景判定 scene 下拉验证通过
+PASS    0.4s  verify_visual_widget_layout.py  🎉 节点参数水平布局验证通过
+PASS    0.4s  verify_visual_variables.py  🎉 verify_visual_variables 全部通过
+PASS    0.3s  verify_queue_panel.py  🎉 TaskQueuePanel 卡片样式验证 6/6 通过
+PASS    0.3s  verify_material_preview.py  WARNING:root:name 'QFontDatabase' is not defined
+PASS    0.3s  verify_visual_frame_nodes.py  🎉 verify_visual_frame_nodes 全部通过
+PASS    0.3s  verify_trigger_scene_signal.py  🎉 特殊条件触发信号修复验证 18/18 通过
+PASS    0.2s  verify_visual_ocr_material.py  🎉 verify_visual_ocr_material 全部通过
+PASS    0.2s  verify_visual_region_click.py  🎉 verify_visual_region_click 全部通过
+PASS    0.2s  verify_asset_catalog.py  🎉 任务图片关联验证 3/3 通过
+PASS    0.2s  verify_material_viewer.py  🎉 verify_material_viewer 全部通过
+PASS    0.2s  verify_teach_save_scene.py  🎉 verify_teach_save_scene 全部通过
+FAIL    0.2s  verify_asset_meta.py  AttributeError: 'NoneType' object has no attribute 'text'
+PASS    0.2s  verify_visual_in_game_task.py  🎉 verify_visual_in_game_task 全部通过
+PASS    0.2s  verify_battle_tab.py  🎉 战斗配置取消 + 变量/常量 Tab 验证 4/4 通过
+PASS    0.2s  verify_visual_state_machine.py  🎉 verify_visual_state_machine 全部通过
+PASS    0.2s  verify_visual_icon_count.py  🎉 verify_visual_icon_count 全部通过
+PASS    0.2s  verify_visual_progress.py  🎉 verify_visual_progress 全部通过
+PASS    0.2s  verify_visual_param_process.py  🎉 verify_visual_param_process 全部通过
+PASS    0.2s  verify_canvas_zoom_erase.py  🎉 verify_canvas_zoom_erase 全部通过
+PASS    0.2s  verify_visual_complex.py  🎉 复杂任务（循环+判断）端到端验证通过
+PASS    0.2s  verify_visual_compound.py  🎉 verify_visual_compound 全部通过
+PASS    0.2s  verify_task_chain.py  🎉 设计书任务链全部通过！
+PASS    0.2s  verify_log_drawer.py  🎉 日志抽屉验证 4/4 通过
+PASS    0.2s  verify_account_manage.py  🎉 小号管理添加功能验证 26/26 通过
+PASS    0.2s  verify_visual_multires.py  🎉 多分辨率适配验证通过
+PASS    0.1s  verify_schedule_ui.py  🎉 重复规则下拉 + 调度推进 + 执行模式移除 + 计数语义 + 选项清理验证 36 项通过
+PASS    0.1s  verify_trigger_signal.py  🎉 触发信号多选下拉验证 11 项通过
+PASS    0.1s  verify_sub_multiselect.py  🎉 组队小号多选下拉验证 12/12 通过
+PASS    0.1s  verify_cycle_tasks.py  WARNING:root:状态键 'task_runtime_progress' 的 set_state 收到了与旧值相同的对象引用，可能通过 get_state 直接修改了可变对象
+FAIL    0.1s  verify_interrupt_handling.py  AssertionError: FAIL: ③ 成功后正常推进(明天)  2026-08-17 06:00:00+08:00
+PASS    0.1s  verify_next_run_sync.py  🎉 下次执行实时同步验证 7 项通过
+PASS    0.1s  verify_active_range.py  🎉 活动有效期 + 表单收集分支验证 18 项通过
+PASS    0.1s  verify_pending_excludes_current.py  🎉 待执行区排除执行中任务验证 3/3 通过
+PASS    0.1s  verify_weekday_multi.py  🎉 每周几多选 + 触发按钮右侧验证 8/8 通过
+PASS    0.1s  verify_config_form.py  🎉 配置表单链路全部通过！
+PASS    0.1s  verify_save_chain.py  🎉 保存配置 _save() 完整链路验证 13 项通过
+PASS    0.1s  verify_queue_progress.py  🎉 任务队列进度验证 17 项通过
+PASS    0.1s  verify_self_check_chain.py  🎉 自检后端链路验证 8 项通过
+PASS    0.1s  verify_repeat_visibility.py  调查结果: 通过 68 项, 遗留 0 项
+PASS    0.1s  verify_task_template.py  🎉 任务模板生成器验证 4/4 通过
+PASS    0.1s  verify_ui_settings.py  🎉 UI 设置联动与日志筛选验证 19 项通过
+PASS    0.1s  verify_task_manager_actions.py  🎉 TaskManagerPanel 管理按钮验证 10 项通过
+PASS    0.1s  verify_config_panel.py  🎉 ConfigPanel 全局配置面板验证 18 项通过
+PASS    0.1s  verify_daily_once.py  🎉 daily 积压修复验证 4/4 通过
+PASS    0.1s  verify_task_manager_ui.py  🎉 TaskManagerPanel UI 同步验证 4/4 通过
+PASS    0.1s  verify_wheel_guard.py  🎉 输入框滚轮防护验证 4/4 通过
+PASS    0.1s  verify_requeue_fix.py  🎉 重复入队修复验证 4/4 通过
+
+总耗时 62.7s  |  通过 70  失败 3
+失败: ['verify_signal.py', 'verify_asset_meta.py', 'verify_interrupt_handling.py']

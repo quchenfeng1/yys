@@ -256,6 +256,30 @@ class ConfigManager:
         self._coords_cache[name] = data
         return data
 
+    # ── 游戏切换（2026-08-16 B方案）───────────────────────
+
+    def switch_game(self, game_tasks_yaml: str | Path | None = None,
+                    game_coords_dir: str | Path | None = None) -> None:
+        """切换到另一个游戏的配置路径（tasks.yaml / coords 目录）并热重载。
+
+        全局配置（global.yaml/accounts.yaml）不随游戏变化，不重载。
+        调用方（bootstrap）负责通知其他模块（调度器等）自行重建。
+        """
+        with self._lock:
+            if game_tasks_yaml:
+                self._game_tasks_path = Path(game_tasks_yaml)
+                self._paths["tasks"] = str(self._game_tasks_path)
+            if game_coords_dir:
+                self._game_coords_dir = Path(game_coords_dir)
+                self._paths["coords"] = str(self._game_coords_dir)
+            # 重载游戏级配置（tasks.yaml 必须存在；异常留给调用方感知）
+            self._load_tasks_internal()
+            # coords 缓存与索引失效 → 惰性重建
+            self._coords_cache.clear()
+            for k in [k for k in self._index_cache if k.startswith("coords.")]:
+                self._index_cache.pop(k, None)
+
+
     # ── 版本迁移（§4.4）────────────────────────────────────
 
     def _run_migrations(self) -> None:
@@ -765,6 +789,35 @@ class ConfigManager:
             # 写盘成功 → 更新缓存
             self._raw_tasks = tasks_section
             # 重建 tasks_config 缓存，使 Scheduler 热重载能立即读到最新
+            try:
+                self._tasks = validate_tasks_config(tasks_section)
+            except Exception:
+                pass
+            self._invalidate_index_prefix("tasks")
+            self._bus.publish(Events.CONFIG_CHANGED, source="tasks", task_name=name)
+
+    def remove_task(self, name: str) -> None:
+        """从 tasks.yaml 删除任务条目（2026-08-16：任务文件删除后清理调度条目）。
+
+        与 update_task 对称：原子写盘 → 重建缓存 → 发布 CONFIG_CHANGED
+        （调度器订阅后热重载并清理该任务的 next_run/today_count 等状态）。
+        """
+        import copy
+        with self._lock:
+            tasks_section = copy.deepcopy(self._raw_tasks or {})
+            tasks_list = tasks_section.get("tasks") or []
+            if not isinstance(tasks_list, list):
+                tasks_list = []
+                tasks_section["tasks"] = tasks_list
+            tasks_section["tasks"] = [
+                t for t in tasks_list
+                if not (isinstance(t, dict)
+                        and (t.get("name") == name or t.get("id") == name))
+            ]
+            # 写盘优先（§3.3）
+            self._atomic_save("tasks", tasks_section)
+            # 写盘成功 → 更新缓存
+            self._raw_tasks = tasks_section
             try:
                 self._tasks = validate_tasks_config(tasks_section)
             except Exception:

@@ -21,7 +21,7 @@ node.set_selected(False)  # 未选中态，body 为纯卡片背景色 (13,18,23)
 app.processEvents()
 
 # 1. 属性检查：透明 + 深色 QSS + label 颜色
-w = node.get_widget("point")
+w = node.get_widget("template")
 group = w.widget()
 print("[1] 内嵌控件容器属性")
 print("  WA_TranslucentBackground:", bool(group.testAttribute(Qt.WA_TranslucentBackground)))
@@ -34,9 +34,9 @@ assert "#1b2026" in group.styleSheet()
 print("  ✅ 透明 + 深色 QSS")
 
 # 1.5 列宽检查：属性名列宽一致(80，右对齐) + 输入框列宽一致(150)
-print("[1.5] 固定列宽（label=80 / input=150）")
+print("[1.5] 固定列宽（label=80 / input=170）")
 row_ok = True
-for name in ("point", "offset"):
+for name in ("template",):
     w2 = node.get_widget(name)
     if w2 is None:
         continue
@@ -45,7 +45,7 @@ for name in ("point", "offset"):
     inp2 = g2.layout().itemAt(1).widget()
     lw, iw = lab2.width(), inp2.width()
     print(f"  {lab2.text()}: label={lw} input={iw}")
-    if lw != 80 or iw != 150:
+    if lw != 80 or iw != 170:
         row_ok = False
 assert row_ok, "列宽不一致"
 print("  ✅ 属性名/输入框列宽统一（左右对齐）")
@@ -54,15 +54,14 @@ print("  ✅ 属性名/输入框列宽统一（左右对齐）")
 #     而非 NodeGraphQt 默认给 spinbox/lineedit/checkbox 的 140 限制
 print("[1.6] proxy 占位宽度一致（应都=246，非 140）")
 proxy_ok = True
-for n in (node, c.add_node("set_var"), c.add_node("matcher")):
+for n in (node, c.add_node("set_var"), c.add_node("dragger")):
     n.set_selected(False)
-    for name in ("point", "offset", "var_name", "var_value",
-                 "template", "threshold", "timeout"):
+    for name in ("var_name", "var_value", "template", "threshold", "timeout"):
         w3 = n.get_widget(name)
         if w3 is None:
             continue
         bw = w3.boundingRect().width()
-        if abs(bw - 246) > 2:
+        if abs(bw - 266) > 2:
             proxy_ok = False
         print(f"  {n.type_.split('.')[-1]:9s} {w3.widget().layout().itemAt(0).widget().text():8s} proxy={bw:.0f}")
 assert proxy_ok, "proxy 宽度不一致（可能有 140 限制残留）"

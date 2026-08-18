@@ -110,18 +110,28 @@ class Events:
     # ── 触发监控 trigger ────────────────────────────────────
     TRIGGER_DETECTED: Final[str] = "trigger_detected"  # TriggerWatcher 识别命中触发模板，05 订阅后置任务为到期
 
+    # ── 任务信号 task_signal（2026-08-16 信号体系）──────────────
+    TASK_SIGNAL: Final[str] = "task_signal.sent"  # 任务信号输出节点发出（signal=信号名, payload=参数）
+    TASK_PAUSED: Final[str] = "task_signal.paused"  # 任务暂停等待信号（task/signal）
+    TASK_RESUMED: Final[str] = "task_signal.resumed"  # 暂停任务被信号唤醒（task/signal）
+    TASK_ANOMALY: Final[str] = "task_signal.anomaly"  # 任务异常（task/reason/node_id/signal）
+
     # ── 运行限制 run_limit ──────────────────────────────────
     RUN_LIMIT_REACHED: Final[str] = "run_limit_reached"
 
     # ── 场景事件 scene ──────────────────────────────────────
     SCENE_UNKNOWN: Final[str] = "scene_unknown"
     SCENE_UPDATED: Final[str] = "scene_updated"  # 场景感知命中（detect_scene/probe_scene），07 维护 current_scene、11 显示当前场景
-    SCENE_SIGNAL: Final[str] = "scene_signal"    # 识图素材信号触发：scene/ 素材（配置了 signal）被识别命中时发布（signal=信号名）
+    SCENE_SIGNAL: Final[str] = "scene_signal"    # ⚠️ 2026-08-16 退役：不再对外发布（保留常量兼容旧代码）
 
     # ── 应用事件 app ────────────────────────────────────────
     APP_STARTED: Final[str] = "app_started"
     APP_STOPPING: Final[str] = "app_stopping"
     PREFLIGHT_COMPLETE: Final[str] = "preflight_complete"
+
+    # ── 游戏/模拟器切换（2026-08-16 B方案）──────────────────
+    GAME_SWITCHED: Final[str] = "game.switched"          # 后端整体切换到新游戏（game_id）
+    EMULATOR_SWITCHED: Final[str] = "emulator.switched"  # 连接切换到新模拟器（emulator_id/serial）
 
     # ── 任务列表事件 tasks_list ─────────────────────────────
     TASKS_LIST_CHANGED: Final[str] = "tasks_list_changed"
@@ -139,9 +149,13 @@ class Events:
     # ── OCR 事件 ───────────────────────────────────────────
     OCR_RESULT: Final[str] = "ocr_result"                   # 设计书 §6.2 要求
 
+    # ── 可视化任务 visual（2026-08-16）──────────────────────
+    CALLABLE_VAR_CHANGED: Final[str] = "callable_var.changed"  # 可调用变量被「参数处理」改变（task_id/key/value）
+    VISUAL_PROGRESS: Final[str] = "visual.progress"            # 可视化任务进度快照（缩略图 o 状态/游标）
+
     # ── 组队事件（§6.2）───────────────────────────────────
-    TEAMING_PREPARED: Final[str] = "teaming_prepared"       # 设计书 §6.2 要求
-    COORDINATE_ACTION: Final[str] = "coordinate_action"      # 设计书 §6.2 要求
+    TEAMING_PREPARED: Final[str] = "teaming_prepared"       # ⚠️ 2026-08-16 退役：组队协调链路已删，保留常量兼容
+    COORDINATE_ACTION: Final[str] = "coordinate_action"      # ⚠️ 2026-08-16 退役：组队协调链路已删，保留常量兼容
 
     # ── 错误事件（§6.2）────────────────────────────────────
     ERROR_OCCURRED: Final[str] = "error_occurred"           # 设计书 §6.2 要求
@@ -159,6 +173,8 @@ class Events:
     VISUAL_TEACH_RESUMED: Final[str] = "visual.teach_resumed"     # 示教恢复
     VISUAL_ACTION_RECEIVED: Final[str] = "visual.action_received" # 用户指示（场景/点击点/规则）
     VISUAL_TEACH_PROGRESS: Final[str] = "visual.teach_progress"   # 示教运行日志
+    VISUAL_NODE_EXEC: Final[str] = "visual.node_exec"           # 当前执行节点（画布红框高亮，node_id 空=清除）
+    VISUAL_IMAGE_PREVIEW: Final[str] = "visual.image_preview"   # 截图器帧 → 节点预览（node_id + data=PNG bytes）
 
     @classmethod
     def all(cls) -> list[str]:

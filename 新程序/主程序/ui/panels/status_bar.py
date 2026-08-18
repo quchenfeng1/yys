@@ -4,7 +4,7 @@ UI 子面板：StatusBar 底部状态栏。
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 
 # ── 状态着色 —— 与设计书 §3.2 优先级色阶一致 ─────────────
@@ -40,13 +40,6 @@ class StatusBar(QWidget):
         self.account_label = QLabel("")
         self.duration_label = QLabel("")
         self.queue_label = QLabel("")
-        self.mode_label = QLabel("")
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFixedWidth(200)
-        self.progress_bar.setTextVisible(True)
 
         self.info_label = QLabel("")
         self.info_label.setAlignment(Qt.AlignRight)
@@ -58,8 +51,6 @@ class StatusBar(QWidget):
         layout.addWidget(self.account_label, 0)
         layout.addWidget(self.duration_label, 0)
         layout.addWidget(self.queue_label, 0)
-        layout.addWidget(self.mode_label, 0)
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.info_label, 1)
 
     # ── §3.7 状态栏方法 ──────────────────────────────────
@@ -67,10 +58,6 @@ class StatusBar(QWidget):
     def show_message(self, message: str, timeout: int = 5000) -> None:
         """显示状态消息"""
         self.status_label.setText(message)
-
-    def set_progress(self, value: int) -> None:
-        """设置进度 0-100"""
-        self.progress_bar.setValue(value)
 
     def set_info(self, text: str) -> None:
         """设置右侧信息"""
@@ -126,14 +113,6 @@ class StatusBar(QWidget):
         """更新队列长度显示（§3.7 第7项）"""
         self.queue_label.setText(f"队列: {length}个")
 
-    def update_dry_run_mode(self, enabled: bool) -> None:
-        """更新沙盒模式显示（§3.7 第9项）"""
-        if enabled:
-            self.mode_label.setText("沙盒模式")
-            self.mode_label.setStyleSheet("color: #FF9800; font-weight: bold;")
-        else:
-            self.mode_label.setText("")
-
     def reset_all(self) -> None:
         """重置所有状态显示"""
         self.status_label.setText("就绪")
@@ -143,5 +122,3 @@ class StatusBar(QWidget):
         self.account_label.setText("")
         self.duration_label.setText("")
         self.queue_label.setText("")
-        self.mode_label.setText("")
-        self.progress_bar.setValue(0)

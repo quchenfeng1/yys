@@ -16,8 +16,10 @@ _MENU_ORDER = [
     "visual_builder",  # 🛠 可视化构建
     "task_manager", # 📁 任务管理
     "image",        # 🖼 素材管理
-    "accounts",     # 👤 小号管理
-    "history",      # 📊 执行历史
+    "accounts",     # 👤 账号管理
+    "emulators",    # 📱 模拟器管理（2026-08-16）
+    "signals",      # 🔔 信号管理（2026-08-16）
+    "anomalies",    # ⚠️ 异常任务（2026-08-16）
     "config",       # ⚙️ 设置
 ]
 
@@ -28,8 +30,10 @@ _MENU_LABEL = {
     "visual_builder": "可视化构建",
     "task_manager": "任务管理",
     "image": "素材管理",
-    "accounts": "小号管理",
-    "history": "执行历史",
+    "accounts": "账号管理",
+    "emulators": "模拟器管理",
+    "signals": "信号管理",
+    "anomalies": "异常任务",
     "config": "设置",
 }
 _MENU_ICON = {
@@ -39,7 +43,9 @@ _MENU_ICON = {
     "task_manager": "fa5s.folder-open",
     "image": "fa5s.images",
     "accounts": "fa5s.user",
-    "history": "fa5s.chart-bar",
+    "emulators": "fa5s.mobile-alt",
+    "signals": "fa5s.broadcast-tower",
+    "anomalies": "fa5s.exclamation-triangle",
     "config": "fa5s.cog",
 }
 

@@ -1,0 +1,271 @@
+{
+  "name": "test_test1",
+  "display_name": "测试1",
+  "category": "daily",
+  "version": 1,
+  "settings": {
+    "match_threshold": 0.85,
+    "unknown_policy": "block",
+    "signal_table": {
+      "enabled": false,
+      "scenes": [],
+      "retry_limit": 5
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "0x138833b3cb0",
+        "type": "start",
+        "name": "开始",
+        "pos": [
+          -175.65226254130914,
+          -12.907091843828514
+        ],
+        "params": {}
+      },
+      {
+        "id": "0x13883442520",
+        "type": "end",
+        "name": "结束",
+        "pos": [
+          1777.0,
+          64.0
+        ],
+        "params": {
+          "finish_mode": "结束任务"
+        }
+      },
+      {
+        "id": "0x13883442650",
+        "type": "end",
+        "name": "结束 1",
+        "pos": [
+          1019.0099590041007,
+          267.00000000000006
+        ],
+        "params": {
+          "finish_mode": "结束任务"
+        }
+      },
+      {
+        "id": "0030c37e8537",
+        "type": "screenshot",
+        "name": "截图器",
+        "pos": [
+          35.86314019739871,
+          11.412073162743333
+        ],
+        "params": {
+          "frame_preview": null
+        }
+      },
+      {
+        "id": "0a90c19e5d43",
+        "type": "ocr_reader",
+        "name": "OCR读取",
+        "pos": [
+          1151.863942881536,
+          26.754041141978874
+        ],
+        "params": {
+          "template": "visual/test_test1/ocr/图标文字1.json",
+          "keyword": "阴阳师",
+          "output_var": ""
+        }
+      },
+      {
+        "id": "ea3a3042068b",
+        "type": "end",
+        "name": "结束 2",
+        "pos": [
+          1701.0,
+          257.0
+        ],
+        "params": {
+          "finish_mode": "结束任务"
+        }
+      },
+      {
+        "id": "88ed3c11d9c8",
+        "type": "scene_probe",
+        "name": "场景判定",
+        "pos": [
+          575.0,
+          93.0
+        ],
+        "params": {
+          "scene": "模拟器6"
+        }
+      },
+      {
+        "id": "82ad88388ba7",
+        "type": "constant_group",
+        "name": "常量组",
+        "pos": [
+          388.0,
+          457.00444314859726
+        ],
+        "params": {
+          "group_name": "常量组1",
+          "variables": null
+        }
+      },
+      {
+        "id": "a28aec554c07",
+        "type": "variable_group",
+        "name": "变量组",
+        "pos": [
+          94.0,
+          362.00444314859726
+        ],
+        "params": {
+          "group_name": "变量组1",
+          "variables": null
+        }
+      }
+    ],
+    "connections": [
+      {
+        "id": "c8314df98c04",
+        "out_node": "0x138833b3cb0",
+        "out_port": "out",
+        "in_node": "0030c37e8537",
+        "in_port": "in"
+      },
+      {
+        "id": "94ec1549b45c",
+        "out_node": "0030c37e8537",
+        "out_port": "out",
+        "in_node": "88ed3c11d9c8",
+        "in_port": "in"
+      },
+      {
+        "id": "fbcdd1ebab3b",
+        "out_node": "0a90c19e5d43",
+        "out_port": "out",
+        "in_node": "0x13883442520",
+        "in_port": "in"
+      },
+      {
+        "id": "7f878170a84c",
+        "out_node": "0a90c19e5d43",
+        "out_port": "miss",
+        "in_node": "ea3a3042068b",
+        "in_port": "in"
+      },
+      {
+        "id": "4131e37cb009",
+        "out_node": "88ed3c11d9c8",
+        "out_port": "out",
+        "in_node": "0a90c19e5d43",
+        "in_port": "in"
+      },
+      {
+        "id": "cf880c8c500a",
+        "out_node": "88ed3c11d9c8",
+        "out_port": "not_found",
+        "in_node": "0x13883442650",
+        "in_port": "in"
+      }
+    ],
+    "tags": [
+      {
+        "id": "03073da11ffb",
+        "name": "11",
+        "pos": [
+          40.0,
+          308.00444314859726
+        ],
+        "size": [
+          738.0,
+          317.20000000000005
+        ],
+        "nodes": [
+          "82ad88388ba7",
+          "a28aec554c07"
+        ],
+        "stage": false
+      },
+      {
+        "id": "4e218493a11f",
+        "name": "22",
+        "pos": [
+          -229.65226254130914,
+          -66.90709184382851
+        ],
+        "size": [
+          637.0154027387078,
+          294.81916500657184
+        ],
+        "nodes": [
+          "0030c37e8537",
+          "0x138833b3cb0"
+        ],
+        "stage": false
+      }
+    ]
+  },
+  "materials": {
+    "scenes": [
+      "模拟器界面",
+      "模拟器界面4",
+      "模拟器6"
+    ],
+    "elements": [
+      "visual/test_test1/icons/阴阳师图标2.json",
+      "visual/test_test1/icons/模拟器图标3.json",
+      "visual/test_test1/icons/阴阳师图标5.json"
+    ],
+    "ocr": [
+      "visual/test_test1/ocr/图标文字识别测试.json",
+      "visual/test_test1/ocr/图标文字1.json"
+    ]
+  },
+  "teach": {
+    "scenes": [
+      {
+        "id": "模拟器6",
+        "name": "模拟器6",
+        "signal": "模拟器6",
+        "accuracy": 1,
+        "regions": [
+          {
+            "name": "红1区",
+            "region": [
+              0.07619201030927829,
+              0.09621993127147767,
+              0.9046391752577321,
+              0.7938144329896907
+            ],
+            "markers": [
+              {
+                "name": "蓝1区",
+                "templates": [
+                  {
+                    "template": "visual/test_test1/scenes/模拟器6_蓝1区_1_1786781326542.png",
+                    "dx": 0,
+                    "dy": 0
+                  }
+                ],
+                "region": [
+                  0.5555734536082474,
+                  0.11168384879725086,
+                  0.3885309278350516,
+                  0.27147766323024053
+                ],
+                "threshold": 0.85
+              }
+            ]
+          }
+        ],
+        "judgements": [],
+        "logic": "and"
+      }
+    ],
+    "points": [],
+    "ocr_regions": []
+  },
+  "param_values": {},
+  "progress_groups": []
+}

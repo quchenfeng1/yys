@@ -88,20 +88,60 @@ QT_QPA_PLATFORM=offscreen QT_PLUGIN_PATH="$PWD/.venv/lib/python3.9/site-packages
 
 ## 3. ⏳ 进行中 / 下一步
 
-### 3.1 ★核心方向：场景状态机架构（详见《示教节点设计构想.md》第十一节）
-用户已把思路从「线性脚本」转为「有限状态机」：
-- 每个任务若干固定画面（场景）；在已知场景内=未脱离任务，否则=异常。
-- **场景信号表**（新增）：区域特征→场景信号的映射，一次截图多分类识别，输出命中场景 id。
-- **场景起始节点**（新增 scene_entry）：监听场景信号，命中即激活该场景任务。
-- **期望页面快速路径**：跳转固定时先查期望页面（复用 scene_probe），未命中才回查全局表。
-- 异常=全无命中→接示教；重试上限=连续 N 次同一场景→报错。
+### 3.1 ✅ 场景状态机（已落地，2026-08-15 定稿，见《示教节点设计构想.md》第十一节）
+用户已把思路从「线性脚本」转为「有限状态机」，并已落地为**外置配置 + 信号触发器**模式：
+- **场景信号表** = 任务级配置 `task.settings.signal_table {enabled, scenes, retry_limit}`，
+  非图内节点；`scenes` 空=场景库全部。
+- **自动回查**：识图节点（scene_probe/matcher/ocr_reader/clicker）失败且失败端口无连线时，
+  图执行器隐式回查全局信号表（`graph_runner._auto_route_signal_table`）。
+- **信号触发器**：`scene_trigger` 节点（无输入端口，仅 out）声明监听场景 id，
+  信号表命中该场景即被激活，从 out 执行场景内逻辑。
+- 全无命中 → `on_unknown(type=signal_table_unknown)` 接示教；命中无触发器 → 报错；
+  连续 N 次同一场景 → 报错（retry_limit）。
+- 多场景同时命中 → 取匹配分数最高（`_judge_scene_score` 打分链路）。
+- 旧任务 JSON 自动迁移：`scene_detect` 参数并入 settings、`scene_entry` → `scene_trigger`。
+- 验证：`tools/verify_visual_state_machine.py`（8 用例）。
 
-**待拍板的 3 个细节**（见设计文档第十一节末尾）。
+### 3.1b ✅ 截图器 + 帧缓存 + 帧对比 + 点击器融合（2026-08-15，见设计构想第十二/十三节）
+- **截图器 screenshot**：唯一截图权，写帧缓存（frame/prev_frame/_last_capture）。
+- **自动清帧**：操作节点（clicker/dragger/navigator/refresher/scroll_capture/operation）
+  执行后 dispatch 自动 `clear_frame()`，防止识图读到操作前旧帧。
+- **识图 fallback**：无帧时识图节点自行截图（旧任务兼容）。
+- **frame_diff 帧对比**：相似度≥阈值→same（拖到底），否则 changed；链路
+  「截图器→拖拽→截图器→帧对比」；相似度写 output_var。
+- **点击器融合**：新增「图标+区域」模式（icon/region/threshold 参数），区域内识别图标
+  并点击；未命中走 not_found；区域支持变量引用（循环每轮 set_var 更新）。
+- `_resolve_region_ref`：区域三级解析（变量/数据流→字面量→全图）。
+- scroll_capture 改读帧缓存（滚动用循环搭：截图器+拖拽器）。
+- 验证：`tools/verify_visual_frame_nodes.py`（8 用例）。
+
+### 3.1c ✅ 复合节点 + 通用节点库（2026-08-15，取代旧「通用操作」体系）
+用户决策：删除通用任务（operation）概念，改为在游戏任务中**框选节点封装为复合节点**，
+可保存为**通用节点**（对应游戏）复用。
+- **封装**：画布多选（框选/Ctrl 点选）→ 空白右键「📦 封装为复合节点」；
+  单入口单出口（多入多出/start/end 拒绝）；compound 节点内嵌 subgraph{nodes,connections,entry_id}。
+- **保存为通用节点**：复合节点右键「💾 保存为通用节点」→ 存 games/{game}/nodes/ +
+  games/_shared/nodes/（CompoundStore）；「通用节点」Tab 双击添加到画布（子图内嵌）。
+- **执行**：_exec_compound 内联跑子图（run_graph entry_id 从子图入口开始）；
+  无内嵌 subgraph 时按 params.source 从库加载。
+- 已删除：operation 节点/执行器、OperationStore、参数上浮（4.27）、打开任务弹窗通用操作 Tab。
+- ⚠️ NodeGraphQt 保留字：icon/name 不可作参数名；未知参数进 undo 栈 redo 崩溃
+  （_apply_params 已防御：无 widget 参数跳过）。
+- 验证：verify_visual_compound.py / verify_visual_open_dialog.py（封装段）/
+  verify_visual_game_switch.py（通用节点随游戏切换）。
 
 ### 3.2 主 UI 显示"正在运行的游戏"（已分析，未实施）
 游戏由 bootstrap 读 `YYS_GAME` 环境变量（默认 yys）固定；已给 A/B/C 三层方案，待用户确认。
 
-### 3.3 后续可做（未要求）
+### 3.3 Windows 环境（2026-08-15 新增）
+- 本项目已在 Windows 适配：venv `d:/yys/.venv`（Python 3.13.7）；
+  NodeGraphQt 需 `pip install setuptools`（Py3.13 缺 distutils）；`qt_material` 已装。
+- 启动：双击 `新程序/主程序/启动UI.bat`（Windows 版 `启动UI.command`）。
+- 回归命令（PowerShell）：
+  `$env:QT_QPA_PLATFORM='offscreen'; $env:PYTHONIOENCODING='utf-8'; python tools/run_regression.py --fast --workers 1`
+- `tools/run_regression.py` 已修 Windows 兼容（子进程 utf-8 解码、stdout reconfigure）。
+
+### 3.4 后续可做（未要求）
 - Operation 编辑器 UI、导出 .py、OCR 引擎安装（pip install paddleocr，懒加载）
 
 ---
@@ -169,20 +209,16 @@ QT_QPA_PLATFORM=offscreen QT_PLUGIN_PATH="$PWD/.venv/lib/python3.9/site-packages
 
 ---
 
-## 7. ⚠️ 未提交改动清单（2026-08-14，换设备前务必先提交推送）
+## 7. ⚠️ 未提交改动清单（2026-08-15 追加：Windows 续接后的新改动）
 
-以下文件有本地改动**尚未 commit/push**，换设备前执行：
-```bash
-cd /Users/mac/quproject1/yys
-git add -A
-git commit -m "识图器示教+场景判定v2+可编辑选框+示教模式锁定+设计构想文档"
-git push
-```
+> 08-14 改动已确认同步到 Windows 设备。以下为 08-15 场景状态机重构的改动文件：
 
-改动文件（git status）：
-- 新增：`visual/scene_store.py`、`games/yys/scenes/`、`示教节点设计构想.md`
-- 修改：`visual/nodes.py`、`visual/node_defs.py`、`visual/teach_engine.py`、
-  `visual/visual_task.py`、`core/bootstrap.py`、`core/game_profile.py`、
-  `ui/visual_builder/{screen_canvas,teach_console,pan_viewer,graph_canvas,visual_builder_panel}.py`、
-  `ui/param_bridge/{visual_bridge,run_bridge}.py`、`ui/main_window.py`、
-  `tools/verify_visual_graph.py`、`tools/verify_visual_complex.py`
+改动文件（git status 待提交）：
+- 修改：`visual/visual_schema.py`（settings.signal_table + 旧节点迁移）、
+  `visual/node_defs.py`（移除 scene_detect/scene_entry，新增 scene_trigger）、
+  `visual/nodes.py`（query_signal_table + _exec_scene_trigger + 打分链路）、
+  `visual/graph_runner.py`（隐式自动回查路由）、
+  `visual/visual_task.py`、`visual/teach_engine.py`（注入 scene_lister）、
+  `ui/visual_builder/visual_builder_panel.py`（信号表配置区）、
+  `tools/run_regression.py`（Windows 编码兼容）
+- 新增：`tools/verify_visual_state_machine.py`、`新程序/主程序/启动UI.bat`

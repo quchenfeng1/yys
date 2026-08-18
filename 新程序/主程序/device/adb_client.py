@@ -157,6 +157,24 @@ class ADBClient:
                 return d["serial"]
         return None
 
+    def connect_tcp(self, host: str, port: int, timeout: float = 8.0) -> bool:
+        """主动 adb connect（设备不在 adb devices 中时用）。
+
+        模拟器重启后端口可能变化（如 16416→5557），且 adb server 残留旧连接：
+        仅查 adb devices 会误判"无设备"。这里对候选地址执行 connect，
+        返回是否连上（connected / already connected）。
+        """
+        try:
+            result = subprocess.run(
+                [self._adb_path, "connect", f"{host}:{port}"],
+                capture_output=True, timeout=timeout)
+            out = (result.stdout or b"").decode(errors="replace")
+            err = (result.stderr or b"").decode(errors="replace")
+            text = (out + " " + err).lower()
+            return ("connected to" in text or "already connected" in text)
+        except Exception:
+            return False
+
     # ── 输入模拟 ──────────────────────────────────────────────
 
     def tap(self, x: int, y: int) -> None:

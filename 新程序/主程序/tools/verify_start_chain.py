@@ -10,7 +10,7 @@
   ① 点击启动 → START_REQUESTED 事件发布
   ② execute 启动：RUN_STARTED 发布、run_status=running、filler/executor 线程活跃
   ③ UI 反馈：ControlBar 启动按钮禁用 / 停止暂停启用 / 沙盒禁用
-  ④ 任务全流程：入队(TASK_QUEUED) → 执行(TASK_STARTED/TASK_COMPLETED) → mark_done → execution_history 记录
+  ④ 任务全流程：入队(TASK_QUEUED) → 执行(TASK_STARTED/TASK_COMPLETED) → mark_done
   ⑤ 重复点击启动被幂等拦截（不重复启动线程）
   ⑥ 暂停 → RUN_PAUSED + is_paused；继续 → RUN_RESUMED
   ⑦ 停止 → RUN_STOPPED、run_status=stopped、三线程退出、队列清空
@@ -195,7 +195,7 @@ def main():
     check("③ 启动按钮禁用", not cb.btn_start.isEnabled())
     check("③ 停止按钮启用", cb.btn_stop.isEnabled())
     check("③ 暂停按钮启用", cb.btn_pause.isEnabled())
-    check("③ 沙盒禁用", not cb.chk_dry_run.isEnabled())
+    check("③ 游戏下拉禁用", not cb.combo_game.isEnabled())
 
     # ═══ ④ 任务全流程 ═══
     deadline = time.time() + 5.0
@@ -205,12 +205,6 @@ def main():
     check("④ TASK_STARTED 发布", events["TASK_STARTED"] >= 1)
     check("④ TASK_COMPLETED 发布", events["TASK_COMPLETED"] >= 1)
     check("④ mark_done 调用", sched.marked == [("task_a", True)], str(sched.marked))
-    deadline = time.time() + 3.0
-    while not sm.get_state("execution_history", []) and time.time() < deadline:
-        time.sleep(0.05)
-    hist = sm.get_state("execution_history", [])
-    check("④ execution_history 已记录", len(hist) == 1 and hist[0]["task_name"] == "task_a"
-          and hist[0]["success"] is True, str(hist))
 
     # ═══ ⑤ 重复点击启动 → 幂等 ═══
     t_before = id(ctrl._filler_thread)

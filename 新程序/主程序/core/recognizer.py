@@ -103,6 +103,31 @@ class Recognizer:
         self._load_templates()
         self._load_meta()
 
+    # ── 游戏切换（2026-08-16 B方案）───────────────────────
+
+    def switch_game(self, image_manager: ImageManager | None = None,
+                    ocr_locator: Any = None,
+                    asset_dir: str | None = None) -> None:
+        """切换到新游戏的素材体系：换素材管理器/OCR定位器/素材目录并重载。
+
+        bootstrap 已按新游戏构造好新的 ImageManager（已扫描新素材目录）
+        与 OcrLocator（新 OCR 语言）后调用本方法。
+        """
+        with self._lock:
+            if image_manager is not None:
+                self._img_mgr = image_manager
+            if ocr_locator is not None or asset_dir is not None:
+                self._ocr = ocr_locator if ocr_locator is not None else self._ocr
+                if asset_dir is not None:
+                    self._asset_dir = asset_dir
+                # 素材/元数据/结果缓存全部失效 → 惰性重载
+                self._asset_cache.clear()
+                self._meta.clear()
+                with self._cache_lock:
+                    self._result_cache.clear()
+                self._load_templates()
+                self._load_meta()
+
     # ── 配置 ──────────────────────────────────────────────────
 
     @property

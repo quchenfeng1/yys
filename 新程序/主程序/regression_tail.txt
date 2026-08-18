@@ -1,0 +1,9 @@
+exit=1 dur=62.8s
+PASS    0.1s  verify_config_panel.py  🎉 ConfigPanel 全局配置面板验证 18 项通过
+PASS    0.1s  verify_daily_once.py  🎉 daily 积压修复验证 4/4 通过
+PASS    0.1s  verify_task_manager_ui.py  🎉 TaskManagerPanel UI 同步验证 4/4 通过
+PASS    0.1s  verify_wheel_guard.py  🎉 输入框滚轮防护验证 4/4 通过
+PASS    0.1s  verify_requeue_fix.py  🎉 重复入队修复验证 4/4 通过
+
+总耗时 62.7s  |  通过 70  失败 3
+失败: ['verify_signal.py', 'verify_asset_meta.py', 'verify_interrupt_handling.py']

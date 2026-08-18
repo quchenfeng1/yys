@@ -165,8 +165,10 @@ def main():
     time.sleep(1.2)  # 足够 filler/executor 多轮循环
     check("② 暂停中 task_b 未被消费", len(sched.marked) == 1,
           f"已消费 {len(sched.marked)} 个")
-    hist = sm.get_state("execution_history", [])
-    check("② execution_history 仍 1 条", len(hist) == 1, str(len(hist)))
+    _stats = getattr(mon, "_task_stats", {})
+    check("② 任务完成统计仍 1 次",
+          _stats.get("task_a") is not None and _stats["task_a"].total == 1,
+          str(getattr(_stats.get("task_a"), "total", None)))
 
     # ═══ ③ 【漏洞修复】暂停中收到 START_REQUESTED 不重启 ═══
     filler_before = id(ctrl._filler_thread)
@@ -214,7 +216,8 @@ def main():
     check("⑦ 停止后暂停按钮禁用", not cb.btn_pause.isEnabled())
     check("⑦ 停止后停止按钮禁用", not cb.btn_stop.isEnabled())
     check("⑦ 停止后启动按钮恢复", cb.btn_start.isEnabled())
-    check("⑦ 停止后沙盒恢复", cb.chk_dry_run.isEnabled())
+    check("⑦ 停止后游戏下拉恢复", cb.combo_game.isEnabled())
+    check("⑦ 停止后连接按钮恢复", cb.btn_connect.isEnabled())
 
     print(f"\n🎉 暂停按钮调用链路验证 {PASS} 项通过")
 

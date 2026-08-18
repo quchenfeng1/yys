@@ -44,7 +44,7 @@ class ConnectionManager:
         auto_reconnect: bool = True,
         max_retries: int = 5,
     ):
-        self._adb = adb_client or ADBClient()
+        self._adb = adb_client or self._make_default_adb()
         self._event_bus = event_bus or get_global_bus()
         self._bus = self._event_bus  # 兼容别名
         self._config = config
@@ -95,8 +95,18 @@ class ConnectionManager:
 
     # ── 连接 ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _make_default_adb() -> "ADBClient":
+        """构造默认 ADB 客户端（用平台检测的真 adb 路径，避免 PATH 坏 adb）"""
+        from device.emulator import EmulatorDetector
+        return ADBClient(adb_path=EmulatorDetector._find_adb())
+
     def connect(self, serial: str | None = None) -> bool:
-        """建立连接。成功后清除 _conn_pause_event 恢复操作。"""
+        """建立连接。成功后清除 _conn_pause_event 恢复操作。
+
+        serial 未指定时：adb devices 里的首台设备；列表为空（模拟器重启/
+        端口漂移导致 adb server 无记录）时自动扫描候选地址并 adb connect。
+        """
         with self._lock:
             if self._connected:
                 return True
@@ -104,7 +114,10 @@ class ConnectionManager:
             if not serial:
                 serial = self._adb.get_first_device()
                 if not serial:
-                    raise DeviceNotFoundError("未发现可用设备")
+                    serial = self._discover_serial()
+
+            if not serial:
+                raise DeviceNotFoundError("未发现可用设备")
 
             self._current_serial = serial
             self._adb.serial = serial
@@ -198,6 +211,45 @@ class ConnectionManager:
     def ensure_connected(self) -> None:
         if not self._connected:
             raise ConnectionError("设备未连接")
+
+    def _discover_serial(self) -> str | None:
+        """adb devices 为空时主动发现设备：配置端口优先，其次模拟器端口扫描。
+
+        模拟器重启后端口可能漂移（16416→5557），且 adb server 残留旧记录；
+        对候选地址逐个 adb connect，返回第一台连上的 serial。
+        """
+        candidates: list[tuple[str, int]] = []
+        host = "127.0.0.1"
+        port = 5555
+        try:
+            g = getattr(self._config, "global_config", None)
+            if g is not None and getattr(g, "device", None) is not None:
+                d = g.device
+                adb_cfg = getattr(d, "adb", None)
+                if adb_cfg is not None:
+                    host = str(getattr(adb_cfg, "host", None) or "127.0.0.1")
+                    port = int(getattr(adb_cfg, "port", None) or 5555)
+        except Exception:
+            pass
+        candidates.append((host, port))
+        try:
+            from device.emulator import EmulatorDetector
+            for info in EmulatorDetector().detect_all():
+                h, _, p = info.serial.rpartition(":")
+                h = h or "127.0.0.1"
+                if p.isdigit() and (h, int(p)) not in candidates:
+                    candidates.append((h, int(p)))
+        except Exception:
+            pass
+        for h, p in candidates:
+            try:
+                if self._adb.connect_tcp(h, p):
+                    serial = self._adb.get_first_device()
+                    if serial:
+                        return serial
+            except Exception:
+                continue
+        return None
 
     # ── 连接健康度 ──────────────────────────────────────────
 

@@ -2,11 +2,14 @@
 UI 子面板：ConfigPanel 全局配置面板（06-配置管理中心 的可编辑表单）。
 
 按《06-配置管理中心》§4.7 + config_schema 字段：
-- device（ADB/截屏/模拟器/模拟模式）
+- device（仅「模拟设备模式」；地址/连接由「模拟器管理」统一承载）
 - image（模板阈值/OCR）
 - anti_detect（防封）
-- schedule（调度）
 - log（日志）
+
+2026-08-16 精简：移除无后端消费者的字段——
+ADB 主机/端口/超时/重试、截图方式/质量/缩放/缓存、模拟器路径/名称、
+匹配方法、鼠标模拟/行为画像/每周休息日、调度组（schedule.*）。
 
 读写经 ParamBridge.config（ConfigBridge）→ ConfigManager，保存即原子写盘。
 """
@@ -20,9 +23,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QVBoxLayout, QWidget,
 )
 
-MATCH_METHODS = ["cv2.TM_CCOEFF_NORMED", "cv2.TM_CCORR_NORMED", "cv2.TM_SQDIFF_NORMED"]
 LOG_LEVELS = ["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
-SCREEN_METHODS = ["adb", "minicap", "scrpy"]
 
 
 class ConfigPanel(QWidget):
@@ -63,25 +64,18 @@ class ConfigPanel(QWidget):
         self._status_label.setStyleSheet("color:#4CAF50;")
         root.addWidget(self._status_label)
 
-        # ── 设备组 ──────────────────────────────────────
+        # ── 设备组（2026-08-16 精简）──────────────────
+        # ADB 地址/端口/截图/模拟器路径等已由「模拟器管理」统一承载，
+        # 仅保留真正被后端消费的 device.mock。
         from ui.theme import panel_group
         g_dev, dev_content = panel_group("设备 (device)")
         f_dev = QFormLayout()
         dev_content.addLayout(f_dev)
-        self._add_field(f_dev, "device.adb.host", "ADB 主机", "line", "127.0.0.1")
-        self._add_field(f_dev, "device.adb.port", "ADB 端口", "int", 5037, 1, 65535)
-        self._add_field(f_dev, "device.adb.timeout", "ADB 超时(秒)", "float", 30.0, 1, 120)
-        self._add_field(f_dev, "device.adb.max_retries", "最大重试", "int", 3, 0, 20)
-        self._add_field(f_dev, "device.adb.retry_delay", "重试间隔(秒)", "float", 2.0, 0, 60)
-        self._add_field(f_dev, "device.screenshot.method", "截屏方式", "choice", "adb", choices=SCREEN_METHODS)
-        self._add_field(f_dev, "device.screenshot.quality", "截屏质量", "int", 80, 1, 100)
-        self._add_field(f_dev, "device.screenshot.resize_ratio", "缩放比例", "float", 1.0, 0.1, 4.0)
-        self._add_field(f_dev, "device.screenshot.cache", "截图缓存", "bool", True)
-        self._add_field(f_dev, "device.screenshot.cache_ttl", "缓存TTL(秒)", "float", 0.5, 0, 10)
-        self._add_field(f_dev, "device.emulator_path", "模拟器路径", "line", "")
-        self._add_field(f_dev, "device.emulator_name", "模拟器名称", "line", "")
         cb_mock = self._add_field(f_dev, "device.mock", "模拟设备模式(无真实模拟器)", "bool", False)
         cb_mock.setToolTip("开启后无需真实 ADB 设备即可运行（需重启生效）")
+        hint_dev = QLabel("模拟器地址与连接由左侧「模拟器管理」统一配置，无需在此设置")
+        hint_dev.setStyleSheet("color:#8a94a6; font-size:12px;")
+        dev_content.addWidget(hint_dev)
         self._form_layout.addWidget(g_dev)
 
         # ── 识别组 ──────────────────────────────────────
@@ -92,7 +86,6 @@ class ConfigPanel(QWidget):
         self._add_field(f_img, "image.ocr_enabled", "启用 OCR", "bool", True)
         self._add_field(f_img, "image.ocr_timeout", "OCR 超时(秒)", "int", 10, 1, 120)
         self._add_field(f_img, "image.ocr_use_gpu", "OCR 使用 GPU", "bool", False)
-        self._add_field(f_img, "image.match_method", "匹配方法", "choice", "cv2.TM_CCOEFF_NORMED", choices=MATCH_METHODS)
         self._form_layout.addWidget(g_img)
 
         # ── 防封组 ──────────────────────────────────────
@@ -103,20 +96,20 @@ class ConfigPanel(QWidget):
         self._add_field(f_ad, "anti_detect.min_interval", "最小间隔(秒)", "float", 1.0, 0.1, 60)
         self._add_field(f_ad, "anti_detect.max_interval", "最大间隔(秒)", "float", 5.0, 0.1, 120)
         self._add_field(f_ad, "anti_detect.action_jitter", "点击抖动", "bool", True)
-        self._add_field(f_ad, "anti_detect.mouse_simulation", "鼠标模拟", "bool", True)
         self._add_field(f_ad, "anti_detect.random_fail_rate", "随机失败率", "float", 0.02, 0.0, 1.0, 0.01)
-        self._add_field(f_ad, "anti_detect.behavior_profile", "行为画像", "bool", True)
-        self._add_field(f_ad, "anti_detect.weekly_off_day", "每周休息日", "line", "")
         self._form_layout.addWidget(g_ad)
 
-        # ── 调度组 ──────────────────────────────────────
-        g_sc, sc_content = panel_group("时间调度 (schedule)")
-        f_sc = QFormLayout()
-        sc_content.addLayout(f_sc)
-        self._add_field(f_sc, "schedule.enabled", "启用自动调度", "bool", False)
-        self._add_field(f_sc, "schedule.timezone", "时区", "line", "Asia/Shanghai")
-        self._add_field(f_sc, "schedule.crontab", "Crontab", "line", "")
-        self._form_layout.addWidget(g_sc)
+        # ── 异常检测组（2026-08-16 信号体系）────────────────
+        g_an, an_content = panel_group("异常检测 (anomaly)")
+        f_an = QFormLayout()
+        an_content.addLayout(f_an)
+        self._add_field(f_an, "anomaly.count", "连续相同场景次数", "int", 5, 1, 100)
+        self._add_field(f_an, "anomaly.window", "时间窗口(秒)", "int", 30, 5, 600)
+        hint_an = QLabel("异常判定：同一节点识别出同一场景信号连续 N 次，或时间窗口内\n"
+                         "连续识别到同一场景信号 N 次 → 判定异常，任务交由全局任务安全结束。")
+        hint_an.setStyleSheet("color:#8a94a6; font-size:12px;")
+        an_content.addWidget(hint_an)
+        self._form_layout.addWidget(g_an)
 
         # ── 日志组 ──────────────────────────────────────
         g_lg, lg_content = panel_group("日志 (log)")

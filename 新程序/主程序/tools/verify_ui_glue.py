@@ -6,7 +6,7 @@
   3. MainWindow.closeEvent（确认退出 → RUN_SHUTDOWN；取消 → ignore）
   4. MainWindow.set_theme 主题切换
   5. TaskQueuePanel ⚡触发 卡片按钮点击 → manual_trigger_requested 信号
-  6. 沙盒链路：ControlBar.chk_dry_run → dry_run_toggled → RunBridge.set_dry_mode → ctrl
+  6. 连接按钮/沙盒后端链路：ControlBar.btn_connect → connect_toggled；RunBridge.set_dry_mode → ctrl
   7. LogPanel.export_log 实际写文件
 """
 import os, sys, tempfile
@@ -92,15 +92,8 @@ def main():
     check("2i 运行时长", sb.duration_label.text() == "时长: 01:01:01", sb.duration_label.text())
     sb.update_queue_length(3)
     check("2j 队列长度", "3" in sb.queue_label.text(), sb.queue_label.text())
-    sb.update_dry_run_mode(True)
-    check("2k 沙盒模式", "沙盒" in sb.mode_label.text(), sb.mode_label.text())
-    sb.update_dry_run_mode(False)
-    check("2l 关闭沙盒显示", sb.mode_label.text() == "", sb.mode_label.text())
-    sb.set_progress(66)
-    check("2m 进度条", sb.progress_bar.value() == 66, str(sb.progress_bar.value()))
     sb.reset_all()
-    check("2n 重置", sb.status_label.text() == "就绪" and sb.progress_bar.value() == 0,
-          sb.status_label.text())
+    check("2k 重置", sb.status_label.text() == "就绪", sb.status_label.text())
 
     # ═══ 3. closeEvent ═══
     print("\n[3] closeEvent 退出确认")
@@ -171,15 +164,15 @@ def main():
     check("5b 点击按钮 → manual_trigger_requested('trigger_a')",
           got == ["trigger_a"], str(got))
 
-    # ═══ 6. 沙盒链路 ═══
-    print("\n[6] 沙盒链路")
+    # ═══ 6. 连接按钮/沙盒后端链路（2026-08-16：沙盒 UI 移除，后端保留） ═══
+    print("\n[6] 连接按钮 + 沙盒后端链路")
     from ui.panels.control_bar import ControlBar
     from ui.param_bridge.run_bridge import RunBridge
     cb = ControlBar()
     toggles = []
-    cb.dry_run_toggled.connect(lambda v: toggles.append(v))
-    cb.chk_dry_run.setChecked(True)
-    check("6a chk_dry_run → dry_run_toggled(True)", toggles == [True], str(toggles))
+    cb.connect_toggled.connect(lambda: toggles.append(True))
+    cb.btn_connect.click()
+    check("6a btn_connect → connect_toggled", toggles == [True], str(toggles))
     ctrl = SimpleNamespace(set_dry_mode=lambda v: setattr(ctrl, "_dry", bool(v)),
                            dry=False)
     ctrl._dry = False

@@ -8,7 +8,7 @@
   触发信号      ✗   ✗   ✗    ✗     ✗       ✗      ✗       ✓
   执行时段      ✓   ✓   ✓    ✓     ✓       ✗      ✗       ✗
   活动有效期    ✓   ✓   ✓    ✓     ✓       ✗      ✗       ✗
-  活动循环次数  ✓   ✓   ✓    ✓     ✓       ✓      ✓       ✓
+  活动循环次数  ✗   ✗   ✗    ✗     ✗       ✗      ✗       ✗   (2026-08-16 移除：图内变量取代)
   周期触发次数  ✓   ✓   ✓    ✓     ✓       ✓      ✓       ✓
   循环次数      ✓   ✓   ✓    ✓     ✓       ✓      ✓       ✓
 
@@ -38,28 +38,25 @@ def check(label, cond, detail=""):
 # 期望矩阵：类型 → {属性: 期望可见}
 EXPECT = {
     "daily":        {"weekday": False, "interval": False, "trigger": False,
-                     "slot": True, "active": True, "total": True, "max_daily": True,
+                     "slot": True, "active": True, "total": False, "max_daily": True,
                      "monthly_day": False},
     "weekly":       {"weekday": True, "interval": False, "trigger": False,
-                     "slot": True, "active": True, "total": True, "max_daily": True,
+                     "slot": True, "active": True, "total": False, "max_daily": True,
                      "monthly_day": False},
     "monthly_start":{"weekday": False, "interval": False, "trigger": False,
-                     "slot": True, "active": True, "total": True, "max_daily": True,
+                     "slot": True, "active": True, "total": False, "max_daily": True,
                      "monthly_day": True},
     "interval_days": {"weekday": False, "interval": True, "trigger": False,
-                     "slot": True, "active": True, "total": True, "max_daily": True,
+                     "slot": True, "active": True, "total": False, "max_daily": True,
                      "monthly_day": False},
     "interval_hours": {"weekday": False, "interval": True, "trigger": False,
-                     "slot": True, "active": True, "total": True, "max_daily": True,
+                     "slot": True, "active": True, "total": False, "max_daily": True,
                      "monthly_day": False},
     "on_enter":     {"weekday": False, "interval": False, "trigger": False,
-                     "slot": False, "active": False, "total": True, "max_daily": True,
+                     "slot": False, "active": False, "total": False, "max_daily": True,
                      "monthly_day": False},
     "once":         {"weekday": False, "interval": False, "trigger": False,
-                     "slot": False, "active": False, "total": True, "max_daily": True,
-                     "monthly_day": False},
-    "trigger":      {"weekday": False, "interval": False, "trigger": True,
-                     "slot": False, "active": False, "total": True, "max_daily": True,
+                     "slot": False, "active": False, "total": False, "max_daily": True,
                      "monthly_day": False},
 }
 
@@ -114,14 +111,16 @@ def main():
             key = WIDGETS[prop]
             cw = w.get(key)
             if cw is None:
-                check(f"{label}({rtype}) {prop} 控件缺失", False, key)
+                # 控件缺失 = 不可见（已移除的控件如 total_count 满足期望隐藏）
+                check(f"{label}({rtype}) {prop} 控件缺失",
+                      not want_visible, key)
                 continue
             actual_visible = not cw.isHidden()
             check(f"{label}·{prop} 期望{'可见' if want_visible else '隐藏'}",
                   actual_visible == want_visible,
                   f"实际={'可见' if actual_visible else '隐藏'}")
     # 时段行的✕删除按钮等控件整体显隐（核心遗留修复）
-    for rtype in ["daily", "on_enter", "once", "trigger"]:
+    for rtype in ["daily", "on_enter", "once"]:
         combo.setCurrentIndex(combo.findData(rtype))
         row_widgets = panel._slot_row_widgets
         want = rtype in ("daily",)

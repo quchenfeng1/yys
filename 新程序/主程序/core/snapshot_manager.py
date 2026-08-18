@@ -74,9 +74,9 @@ class SnapshotManager:
                 fname = f"{timestamp}_{reason}_{self._count}.png"
                 path = self._dir / fname
 
-            # 保存图片
-            import cv2
-            cv2.imwrite(str(path), image)
+            # 保存图片（中文安全写入）
+            from core.cv_io import imwrite as _cv_imwrite
+            _cv_imwrite(str(path), image)
 
             # 清理
             if self._auto_clean:

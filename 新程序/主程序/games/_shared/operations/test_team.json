@@ -1,0 +1,57 @@
+{
+  "name": "test_team",
+  "display_name": "测试任务",
+  "category": "operation",
+  "version": 1,
+  "settings": {
+    "match_threshold": 0.85,
+    "unknown_policy": "block",
+    "signal_table": {
+      "enabled": false,
+      "scenes": [],
+      "retry_limit": 5
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "0x1b49af0f4d0",
+        "type": "start",
+        "name": "开始",
+        "pos": [
+          -439.6113978481346,
+          -188.85421185102913
+        ],
+        "params": {}
+      },
+      {
+        "id": "0x1b49afba210",
+        "type": "end",
+        "name": "结束",
+        "pos": [
+          -8.000979392326556,
+          -188.8231136589068
+        ],
+        "params": {
+          "finish_mode": "结束任务"
+        }
+      }
+    ],
+    "connections": [
+      {
+        "id": "cd0bc5ae9468",
+        "out_node": "0x1b49af0f4d0",
+        "out_port": "out",
+        "in_node": "0x1b49afba210",
+        "in_port": "in"
+      }
+    ]
+  },
+  "teach": {
+    "scenes": [],
+    "points": [],
+    "ocr_regions": []
+  },
+  "inputs": [],
+  "param_values": {}
+}

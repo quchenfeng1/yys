@@ -101,6 +101,17 @@ class TaskManager:
         # fallback: 当前工作目录
         return Path.cwd()
 
+    # ── 游戏切换（2026-08-16 B方案）───────────────────────
+
+    def switch_game(self, tasks_dir: str | Path | None = None,
+                    assets_dir: str | Path | None = None) -> None:
+        """切换到新游戏的任务目录并重扫缓存。"""
+        if tasks_dir:
+            self._tasks_dir = Path(tasks_dir)
+        if assets_dir:
+            self._assets_dir = Path(assets_dir)
+        self.scan_all()
+
     # ═══════════════════════════════════════════════════════════
     #  §5.3 公开方法
     # ═══════════════════════════════════════════════════════════

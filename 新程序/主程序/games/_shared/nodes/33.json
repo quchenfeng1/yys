@@ -1,0 +1,63 @@
+{
+  "name": "33",
+  "display_name": "33",
+  "subgraph": {
+    "nodes": [
+      {
+        "id": "0x13883442650",
+        "type": "end",
+        "name": "结束 1",
+        "pos": [
+          1020.4480908537921,
+          84.35725508921875
+        ],
+        "params": {
+          "finish_mode": "结束任务"
+        }
+      },
+      {
+        "id": "0a90c19e5d43",
+        "type": "ocr_reader",
+        "name": "OCR读取",
+        "pos": [
+          1153.302074731227,
+          -155.88870376880243
+        ],
+        "params": {
+          "template": "visual/test_test1/ocr/图标文字1.json",
+          "keyword": "阴阳师",
+          "output_var": ""
+        }
+      },
+      {
+        "id": "88ed3c11d9c8",
+        "type": "scene_probe",
+        "name": "场景判定",
+        "pos": [
+          576.4381318496912,
+          -89.6427449107813
+        ],
+        "params": {
+          "scene": "模拟器6"
+        }
+      }
+    ],
+    "connections": [
+      {
+        "id": "32418f150103",
+        "out_node": "88ed3c11d9c8",
+        "out_port": "out",
+        "in_node": "0a90c19e5d43",
+        "in_port": "in"
+      },
+      {
+        "id": "e983830a7aeb",
+        "out_node": "88ed3c11d9c8",
+        "out_port": "not_found",
+        "in_node": "0x13883442650",
+        "in_port": "in"
+      }
+    ],
+    "entry_id": "88ed3c11d9c8"
+  }
+}

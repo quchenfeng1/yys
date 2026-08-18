@@ -1,0 +1,44 @@
+{
+  "name": "test_test2",
+  "display_name": "测试2",
+  "category": "daily",
+  "version": 1,
+  "settings": {
+    "match_threshold": 0.85,
+    "unknown_policy": "block",
+    "signal_table": {
+      "enabled": false,
+      "scenes": [],
+      "retry_limit": 5
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "763ea063da52",
+        "type": "start",
+        "name": "开始",
+        "pos": [
+          0,
+          0
+        ],
+        "params": {},
+        "selected": false
+      }
+    ],
+    "connections": [],
+    "tags": []
+  },
+  "materials": {
+    "scenes": [],
+    "elements": [],
+    "ocr": []
+  },
+  "teach": {
+    "scenes": [],
+    "points": [],
+    "ocr_regions": []
+  },
+  "param_values": {},
+  "progress_groups": []
+}

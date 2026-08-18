@@ -58,12 +58,19 @@ def main():
     assert any(t in ("未开始", "待调度") for t in labels), f"徽标缺失: {labels}"
     print("④ PASS 未开始区卡片带状态徽标")
 
-    # 进度条独立更新（update_panel 不覆盖 set_progress 的值）
-    panel.set_progress(42)
-    assert panel.progress_bar.value() == 42, panel.progress_bar.value()
-    panel.update_panel("x", [], [], [])
-    assert panel.progress_bar.value() == 42, "update_panel 不应覆盖进度条"
-    print("⑤ PASS 进度条独立更新且不被 update_panel 覆盖")
+    # 当前步骤 + 执行进度抽屉（2026-08-16 替换总体进度条）
+    assert hasattr(panel, "step_label") and panel.step_label.text() == "无"
+    assert hasattr(panel, "drawer_btn") and not panel.drawer_btn.isChecked()
+    assert hasattr(panel, "thumb") and panel.thumb.isHidden(), "默认应收起进度图"
+    assert not panel.collapsed_row.isHidden(), "默认应显示转圈+进度字段"
+    assert panel.spinner.isHidden(), "无步骤时转圈图标应隐藏"
+    panel.drawer_btn.click()   # 展开
+    assert not panel.thumb.isHidden(), "展开后进度图可见"
+    assert panel.collapsed_row.isHidden(), "展开后收起行隐藏"
+    panel.drawer_btn.click()   # 收起
+    assert panel.thumb.isHidden(), "再次收起进度图隐藏"
+    assert not panel.collapsed_row.isHidden(), "收起后转圈+进度字段可见"
+    print("⑤ PASS 当前步骤 + 进度抽屉（默认收起 / 无步骤显示无+隐藏转圈）")
 
     # 保存截图
     panel.resize(1000, 620)
@@ -73,6 +80,12 @@ def main():
     out = os.path.join(_PROJ_ROOT, "ui_queue_preview.png")
     shot.save(out)
     print(f"⑥ PASS 截图已保存: {out}")
+
+    # 退出前有序销毁（2026-08-16：Windows 平台退出时直接销毁隐藏/显示过的
+    # 自绘控件会偶发 0xC0000005，与 main.py 的 aboutToQuit 清理同款）
+    panel.hide()
+    panel.deleteLater()
+    app.processEvents()
     print("\n🎉 TaskQueuePanel 卡片样式验证 6/6 通过")
 
 

@@ -39,7 +39,7 @@ class TaskStep(ABC):
         self.is_generic = is_generic  # §2.3 是否通用模块
         self.retry_count = retry_count  # §2.3 失败重试次数
         self.timeout = timeout  # §2.3 单步超时秒数
-        # 显式支持 CoopHost(params={...}) 传参：params 从 kwargs 提取后合并，
+        # 兼容历史写法：params 从 kwargs 提取后合并，
         # 避免被当作普通 kwargs 键（导致 self.params = {"params": {...}} 的坑）
         extra_params = kwargs.pop("params", None)
         self.params: dict[str, Any] = {}

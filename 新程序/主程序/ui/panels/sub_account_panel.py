@@ -95,7 +95,7 @@ class AddSubAccountDialog(QDialog):
 
 
 class SubAccountPanel(QWidget):
-    """小号管理面板（§2.2 账号配置 + 添加小号）"""
+    """账号管理面板（§2.2 账号配置 + 添加小号；2026-08-16 更名账号管理）"""
 
     def __init__(self, parent=None, param_bridge: Any = None):
         super().__init__(parent)
@@ -106,7 +106,7 @@ class SubAccountPanel(QWidget):
 
         # 顶部工具条
         top = QHBoxLayout()
-        top.addWidget(QLabel("👤 小号管理"))
+        top.addWidget(QLabel("👤 账号管理"))
         top.addStretch(1)
         btn_add = QPushButton("➕ 添加小号")
         btn_add.clicked.connect(self._on_add_sub)

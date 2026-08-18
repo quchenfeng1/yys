@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJ)
 
-from PyQt5.QtWidgets import QApplication, QCheckBox, QPushButton
+from PyQt5.QtWidgets import QApplication, QComboBox, QPushButton
 
 app = QApplication([])
 from ui.theme import apply_theme
@@ -30,18 +30,25 @@ mt = MenuTree()
 check("菜单树含设置项", "config" in mt._items)
 check("菜单树无独立 ui_settings 项", "ui_settings" not in mt._items)
 
-# ② 控制栏含沙盒开关 + 自检按钮 + 信号
+# ② 控制栏新布局（2026-08-16）：游戏下拉 + 连接按钮 + 启停；沙盒/自检已移除
 from ui.panels.control_bar import ControlBar
 cb = ControlBar()
-check("控制栏含沙盒开关", isinstance(cb.chk_dry_run, QCheckBox))
-check("控制栏含自检按钮", isinstance(cb.btn_self_check, QPushButton))
-check("控制栏 dry_run_toggled 信号存在", hasattr(cb, 'dry_run_toggled'))
-check("控制栏 self_check_clicked 信号存在", hasattr(cb, 'self_check_clicked'))
-# 沙盒信号发出测试
+check("控制栏含游戏下拉", isinstance(cb.combo_game, QComboBox))
+check("控制栏含连接按钮", isinstance(cb.btn_connect, QPushButton))
+check("沙盒开关已移除", not hasattr(cb, 'chk_dry_run'))
+check("自检按钮已移除", not hasattr(cb, 'btn_self_check'))
+# 游戏下拉信号发出测试
 emitted = []
-cb.dry_run_toggled.connect(lambda v: emitted.append(v))
-cb.chk_dry_run.setChecked(True)
-check("沙盒开关发出 True", emitted and emitted[-1] is True)
+cb.game_changed.connect(lambda v: emitted.append(v))
+cb.set_games([("yys", "阴阳师"), ("demo", "演示游戏")])
+cb.set_current_game("demo")
+cb.combo_game.setCurrentIndex(0)   # demo → yys
+check("切换游戏下拉发出 game_changed(yys)", emitted == ["yys"])
+# 连接按钮状态切换
+cb.set_connected(True)
+check("连接后按钮文案=断开连接", "断开连接" in cb.btn_connect.text())
+cb.set_connected(False)
+check("断开后按钮文案=连接模拟器", "连接模拟器" in cb.btn_connect.text())
 
 # ③ RunBridge 含 set_dry_mode / run_self_check
 from ui.param_bridge.run_bridge import RunBridge
@@ -99,7 +106,7 @@ import ui.main_window as mw
 src = inspect.getsource(mw.MainWindow)
 check("MainWindow 含 set_panel_visible", "def set_panel_visible" in src)
 check("MainWindow 含 set_theme", "def set_theme" in src)
-check("MainWindow 含 _on_self_check", "def _on_self_check" in src)
+check("MainWindow 含 _on_self_check 兼容空壳", "def _on_self_check" in src)
 
 print(f"\n🎉 按钮功能修复验证 {ok}/{ok + fail} 通过")
 

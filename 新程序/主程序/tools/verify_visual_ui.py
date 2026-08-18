@@ -49,8 +49,10 @@ def main():
     print("[4] 连线 OK:", c.connection_count())
 
     # 5. 设置参数
-    clicker.get_widget("point").set_value(["pt.a", "pt.b"])   # 刷新下拉
-    clicker.get_widget("point").set_value("pt.a")
+    cw = clicker.get_widget("template")   # 点击器：仅图标素材参数
+    if cw is not None:
+        cw.set_value(["visual/t1/a.png", "visual/t1/b.png"])   # 刷新下拉
+        cw.set_value("visual/t1/a.png")
     branch.get_widget("data_source").set_value("stamina")
     branch.get_widget("op").set_value(">=")
     branch.get_widget("value").set_value("30")
@@ -67,6 +69,13 @@ def main():
     c2 = panel._canvas.connection_count()
     print(f"[6] 保存→重载往返 OK: {n2} 节点 / {c2} 连线")
     assert n2 == 6 and c2 == 4, (n2, c2)
+
+    # 6.5 任务 id ↔ 画布节点映射（运行期高亮/截图预览按任务 id 查找）
+    for nd in exported["graph"]["nodes"]:
+        node = panel._canvas._node_by_id(nd["id"])
+        assert node is not None, f"任务 id {nd['id']} 应能映射到画布节点"
+        assert nd["type"] == node.type_.split(".")[-1]
+    print("[6.5] 任务 id ↔ 画布节点映射 OK")
 
     # 7. 场景判定（教一个场景给 scene_probe 下拉）
     bridge._teach = None

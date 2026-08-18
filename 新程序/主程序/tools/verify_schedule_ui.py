@@ -5,7 +5,7 @@ UI：
   ② weekly → 每周几显示；daily → 隐藏
   ③ interval_days → 间隔值显示 + label"间隔值(天):"
   ④ interval_hours → label"间隔值(小时):"
-  ⑤ daily → 时段显示；trigger → 时段隐藏、触发信号显示
+  ⑤ daily → 时段显示；trigger 已退役（旧配置渲染兼容：时段隐藏、无触发信号控件）
   ⑥ 周期最大触发次数（max_daily）所有类型显示（含 trigger）
 调度：
   ⑦ _dt_in_any_slot 时段判定
@@ -86,9 +86,9 @@ def main():
     w = panel._form_widgets
     combo = panel._form_widgets["repeat_type"]
     types = [combo.itemData(i) for i in range(combo.count())]
-    check("① 下拉含全部类型", all(t in types for t in
+    check("① 下拉含全部类型（trigger 已退役移除）", all(t in types for t in
         ["daily", "weekly", "interval_days", "interval_hours", "on_enter",
-         "once", "trigger"]), str(types))
+         "once"]) and "trigger" not in types, str(types))
     check("① 默认选中 daily", panel._current_repeat_type() == "daily")
 
     def _pick(t):
@@ -110,17 +110,27 @@ def main():
     check("④ interval_hours label 小时", "小时" in w["interval_label"].text(),
           w["interval_label"].text())
 
-    # ⑤ daily → 时段显示；trigger → 时段隐藏 + 触发信号显示
+    # ⑤ daily → 时段显示；trigger 已退役：旧配置渲染时段隐藏、无触发信号控件
     _pick("daily")
     check("⑤ daily 时段显示", not w["slot_label"].isHidden())
-    _pick("trigger")
-    check("⑤ trigger 时段隐藏", w["slot_label"].isHidden())
-    check("⑤ trigger 触发信号显示", not w["trigger_templates"].isHidden())
 
-    # ⑥ 周期最大触发次数所有类型显示（含 trigger）
-    check("⑥ trigger 周期最大次数显示", not w["max_daily"].isHidden())
+    # ⑥ 周期最大触发次数所有类型显示
     _pick("on_enter")
     check("⑥ on_enter 周期最大次数显示", not w["max_daily"].isHidden())
+
+    # ⑤ trigger 已退役：旧配置渲染 → 时段隐藏 + 无触发信号控件 + 回显已下线选项
+    panel._render_form({"name": "t", "display_name": "t",
+                        "task_type": "special", "uses_battle": False,
+                        "enabled": True,
+                        "repeat": {"type": "trigger", "value": 1,
+                                   "trigger_templates": ["sig_a"]}})
+    w = panel._form_widgets
+    check("⑤ trigger 时段隐藏", w["slot_label"].isHidden())
+    check("⑤ 触发信号控件已移除（退役）", "trigger_templates" not in w)
+    check("⑤ 旧 trigger 配置回显已下线选项",
+          w["repeat_type"].currentData() == "trigger",
+          str(w["repeat_type"].currentData()))
+    check("⑥ trigger 周期最大次数显示", not w["max_daily"].isHidden())
 
     # ═══ 调度：时段 + 间隔 + 周期次数 ═══
     import core.scheduler as sch
@@ -232,15 +242,16 @@ def main():
           and "execution_mode_label" not in panel2._form_widgets,
           str(list(panel2._form_widgets.keys())[:30]))
 
-    # ⑫ 循环次数控件存在（更名自「每轮循环/每次执行轮数」）
-    check("⑫ 循环次数控件存在", panel2._form_widgets.get("loop_count") is not None)
+    # ⑫ 循环次数控件已移除（2026-08-16：变量组 count_var 覆盖，UI 不再输入）
+    check("⑫ 循环次数控件已移除", "loop_count" not in panel2._form_widgets,
+          str(list(panel2._form_widgets.keys())[:30]))
 
-    # ⑬ loop_count 单存（只 repeat 内）+ 不写 execution_mode
+    # ⑬ loop_count 不再由 UI 写入（tasks.yaml 旧字段兼容保留）+ 不写 execution_mode
     panel2._render_form(_detail(rtype="daily", slots=[["06:00", "12:00"]]))
     cfg = panel2._collect_config()
     check("⑬ config 无顶层 loop_count", "loop_count" not in cfg, str(cfg))
-    check("⑬ repeat 内有 loop_count", cfg["repeat"].get("loop_count") == 3,
-          str(cfg["repeat"]))
+    check("⑬ repeat 内不再写 loop_count（旧值兼容保留在 tasks.yaml）",
+          "loop_count" not in cfg["repeat"], str(cfg["repeat"]))
     check("⑬ config 无 execution_mode", "execution_mode" not in cfg, str(cfg))
 
     # ⑭ 调度层：无 execution_mode 字段的多时段任务仍每时段一次（per_slot 行为）
@@ -288,7 +299,7 @@ def main():
     check("⑮ mark_done 只累计触发次数",
           sched15._today_count.get("t15") == 1 and sched15._total_count.get("t15") == 0)
 
-    # ⑯ UI：周期触发次数/活动循环次数更名 + 死控件移除 + 累计显示
+    # ⑯ UI：周期触发次数保留 / 活动循环次数已移除（2026-08-16：图内变量取代）
     panel2._render_form(_detail(rtype="daily", slots=[["06:00", "12:00"]]))
     w3 = panel2._form_widgets
     check("⑯ 死控件 trigger_max_count 已移除",
@@ -297,21 +308,17 @@ def main():
     check("⑯ 周期触发次数控件存在",
           w3.get("max_daily") is not None
           and w3.get("max_daily_label").text() == "周期触发次数:")
-    check("⑯ 活动循环次数控件存在(含累计显示)",
-          w3.get("total_count") is not None
-          and w3.get("total_label").text() == "活动循环次数:"
-          and w3.get("cycle_done_label") is not None)
+    check("⑯ 活动循环次数控件已移除（图内变量取代）",
+          "total_count" not in w3 and "total_label" not in w3
+          and "cycle_done_label" not in w3,
+          str([k for k in w3 if "total" in k or "cycle" in k]))
     cfg16 = panel2._collect_config()
-    check("⑯ total_count 所有类型保存(含 trigger)",
-          "total_count" in cfg16,
-          str(cfg16.get("total_count")))
-    # trigger 类型也保存活动循环次数
+    check("⑯ total_count 不再写入保存配置",
+          "total_count" not in cfg16, str(cfg16))
+    # trigger 类型同样无活动循环次数控件
     panel2._render_form(_detail(rtype="trigger", slots=None))
     w4 = panel2._form_widgets
-    w4["total_count"].setValue(50)
-    cfg16b = panel2._collect_config()
-    check("⑯ trigger 类型 total_count 保存",
-          cfg16b.get("total_count") == 50, str(cfg16b.get("total_count")))
+    check("⑯ trigger 类型无 total_count 控件", "total_count" not in w4)
 
     # ═══ ⑰⑱⑲ 重复规则选项清理验证 ═══
     # ⑰ special 已从下拉移除（与 daily 重复）

@@ -19,8 +19,40 @@ class RunBridge:
         self._bus = event_bus or get_global_bus()
         # 兼容旧构造：直接传 RunController
         self._ctrl = kwargs.get('controller')
+        self._conn = kwargs.get('connection')   # ConnectionManager（连接按钮，2026-08-16）
         # 可视化测试运行状态检查器（互斥：测试运行中禁止正式启动）
         self._teach_running = None
+
+    # ── 设备连接（2026-08-16：连接/断开模拟器按钮）──────
+
+    def set_connection(self, conn: Any) -> None:
+        """注入 ConnectionManager（bootstrap L6 调用）"""
+        self._conn = conn
+
+    def is_connected(self) -> bool:
+        try:
+            return bool(self._conn is not None
+                        and self._conn.is_connected())
+        except Exception:
+            return False
+
+    def connect_device(self) -> bool:
+        """连接模拟器（内部含端口扫描，通常数秒内返回）"""
+        if self._conn is None:
+            return False
+        try:
+            return bool(self._conn.connect())
+        except Exception:
+            return False
+
+    def disconnect_device(self) -> bool:
+        if self._conn is None:
+            return False
+        try:
+            self._conn.disconnect()
+            return True
+        except Exception:
+            return False
 
     # ── §5.3 发布事件 ────────────────────────────────────
 
@@ -76,6 +108,15 @@ class RunBridge:
         if self._ctrl and hasattr(self._ctrl, 'queue_snapshot'):
             try:
                 return list(self._ctrl.queue_snapshot)
+            except Exception:
+                pass
+        return []
+
+    def get_paused_snapshot(self) -> list[dict]:
+        """正在执行队列中的暂停任务快照（2026-08-16 信号体系，队列面板暂停展示）"""
+        if self._ctrl and hasattr(self._ctrl, 'paused_snapshot'):
+            try:
+                return list(self._ctrl.paused_snapshot())
             except Exception:
                 pass
         return []

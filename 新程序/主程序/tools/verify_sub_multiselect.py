@@ -55,8 +55,8 @@ def main():
     cb.clear_selection()
     check("clear_selection 清空", cb.selected_data() == [])
 
-    # ════════════ 2. game_task_panel 带 AccountBridge → 多选下拉 ════════════
-    print("\n── [2/4] game_task_panel 带小号管理数据 ──")
+    # ════════════ 2. game_task_panel 组队 UI 已取消（2026-08-16）════════════
+    print("\n── [2/4] game_task_panel 组队 UI 已取消 ──")
     from core.account_manager import AccountManager, AccountInfo
     am = AccountManager(connection=None)
     am._accounts = {
@@ -79,39 +79,29 @@ def main():
     }
     panel._render_form(detail)
     w = panel._form_widgets
-    from ui.widgets.multi_select_combo import MultiSelectCombo
-    check("渲染出 MultiSelectCombo 控件", isinstance(w.get("teaming_sub_ids"), MultiSelectCombo))
-    check("下拉选项=启用的 sub（排除禁用/主号）",
-          w["teaming_sub_ids"].selected_data() == ["sub1", "sub2"]
-          and [d for d, _ in panel._get_sub_options()] == ["sub1", "sub2"],
-          f"opts={panel._get_sub_options()}")
-    check("已存 sub_ids 回显勾选", w["teaming_sub_ids"].selected_data() == ["sub1", "sub2"],
-          str(w["teaming_sub_ids"].selected_data()))
+    check("组队下拉控件已取消（业务参数由变量/常量承载）",
+          "teaming_sub_ids" not in w, str(list(w.keys())[:20]))
+    # _get_sub_options 方法保留（供其它 UI 复用）
+    check("_get_sub_options 仍返回启用的 sub",
+          [d for d, _ in panel._get_sub_options()] == ["sub1", "sub2"],
+          str(panel._get_sub_options()))
 
-    # ════════════ 3. _collect_config 收集多选结果 ════════════
-    print("\n── [3/4] _collect_config 收集 ──")
+    # ════════════ 3. _collect_config 不再收集组队字段 ════════════
+    print("\n── [3/4] _collect_config 不再收集组队字段 ──")
     config = panel._collect_config()
-    check("teaming.sub_ids 收集正确", config.get("teaming") == {"sub_ids": ["sub1", "sub2"]},
-          str(config.get("teaming")))
-    # 清空选择 → teaming=None
-    w["teaming_sub_ids"].clear_selection()
-    config2 = panel._collect_config()
-    check("无选择 → teaming=None", config2.get("teaming") is None, str(config2.get("teaming")))
+    check("config 无 teaming", "teaming" not in config, str(config))
 
-    # ════════════ 4. 无账号数据 → 回退 QLineEdit ════════════
-    print("\n── [4/4] 无小号管理数据回退 ──")
+    # ════════════ 4. 无账号数据 → 行为不变 ════════════
+    print("\n── [4/4] 无小号管理数据 ──")
     panel2 = GameTaskPanel()  # 无 bridge
     panel2._render_form({
         "name": "combat_test", "display_name": "战斗测试", "task_type": "battle",
         "uses_battle": True, "teaming": {"sub_ids": ["sub1", "sub2"]},
     })
     w2 = panel2._form_widgets
-    check("无 bridge → 回退 QLineEdit", isinstance(w2.get("teaming_sub_ids"), QLineEdit))
-    check("QLineEdit 回显", "sub1, sub2" in w2["teaming_sub_ids"].text(),
-          w2["teaming_sub_ids"].text())
+    check("无 bridge 同样无组队控件", "teaming_sub_ids" not in w2)
     cfg4 = panel2._collect_config()
-    check("QLineEdit 收集兼容", cfg4.get("teaming") == {"sub_ids": ["sub1", "sub2"]},
-          str(cfg4.get("teaming")))
+    check("config 无 teaming", "teaming" not in cfg4, str(cfg4))
 
     print(f"\n{'=' * 46}")
     print(f"🎉 组队小号多选下拉验证 {ok}/{ok + fail} 通过")

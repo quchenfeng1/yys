@@ -20,6 +20,7 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
 COLOR_RED = QColor(255, 80, 80)
 COLOR_BLUE = QColor(80, 140, 255)
 COLOR_CYAN = QColor(60, 200, 255)
+COLOR_YELLOW = QColor(255, 210, 60)
 
 
 class ScreenCanvas(QWidget):
@@ -29,6 +30,8 @@ class ScreenCanvas(QWidget):
     region_selected = pyqtSignal(float, float, float, float)  # (x, y, w, h) 相对
     box_deleted = pyqtSignal(str)          # 删除选框 (box_id)
     box_rename_requested = pyqtSignal(str)  # 请求改名 (box_id)
+    box_context_requested = pyqtSignal(str)  # 右键命中选框 (box_id)
+    state_mutating = pyqtSignal()            # 状态即将被修改（撤回快照时机）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,7 +53,16 @@ class ScreenCanvas(QWidget):
         self._masks: dict[str, np.ndarray] = {}
         self._active_mask = "_"
         self._brush_mode = False
+        self._erase_mode = False
+        self._pan_mode = False   # ✋ 拖动模式（左键拖动平移，2026-08-15）
         self._brush_size = 15  # 画笔半径（原始图像像素）
+        self._brush_cursor: QPointF | None = None  # 笔尖指示圆位置（显示坐标）
+        # 视图缩放（2026-08-15）：滚轮缩放 / 中键拖动平移 / 双击复位
+        self._zoom = 1.0      # 相对 fit 的倍数（1~8）
+        self._pan_x = 0.0     # 平移偏移（显示像素）
+        self._pan_y = 0.0
+        self._panning = False
+        self._pan_anchor: QPointF | None = None
         self.setMouseTracking(True)
         self.setMinimumSize(240, 320)
         self.setStyleSheet("background:#282a30;")
@@ -84,21 +96,116 @@ class ScreenCanvas(QWidget):
             else:
                 self._qimg = QImage(rgb.tobytes(), w, h, 3 * w,
                                     QImage.Format_RGB888).copy()
+        self.reset_view()
         self.update()
 
     def has_image(self) -> bool:
         return self._qimg is not None
 
-    # ── 遮罩画笔（识图器示教：涂出要识别的图标形状）──────────
+    # ── 遮罩画笔（示教：涂出要识别的图标形状）──────────
     def set_brush_mode(self, enabled: bool) -> None:
         self._brush_mode = enabled
+        if enabled:
+            self._erase_mode = False   # 画笔/橡皮互斥
+            self._pan_mode = False
+            self.unsetCursor()
         if not enabled:
             self._drag_start = None
             self._drag_rect = None
+            self._brush_cursor = None
+            self.update()
+
+    def set_erase_mode(self, enabled: bool) -> None:
+        """橡皮擦模式：擦除当前活动遮罩上已涂的像素（2026-08-15）"""
+        self._erase_mode = enabled
+        if enabled:
+            self._brush_mode = False
+            self._pan_mode = False
+            self.unsetCursor()
+        if not enabled:
+            self._drag_start = None
+            self._drag_rect = None
+            self._brush_cursor = None
+            self.update()
+
+    def set_pan_mode(self, enabled: bool) -> None:
+        """✋ 拖动模式：左键拖动平移画面（2026-08-15）"""
+        self._pan_mode = enabled
+        if enabled:
+            self._brush_mode = False
+            self._erase_mode = False
+            self.setCursor(Qt.OpenHandCursor)
+        else:
+            self._panning = False
+            self._pan_anchor = None
+            self.unsetCursor()
+
+    # ── 视图缩放/平移（2026-08-15）─────────────────────
+    def zoom(self) -> float:
+        return self._zoom
+
+    def reset_view(self) -> None:
+        """复位：适配整图 + 居中（清平移）"""
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self.update()
+
+    def _zoom_at(self, pos: QPointF, factor: float) -> None:
+        """以 pos（控件坐标）为锚点缩放 factor 倍（保持鼠标下图像点不动）"""
+        if self._qimg is None:
+            return
+        new_zoom = max(1.0, min(8.0, self._zoom * factor))
+        if abs(new_zoom - self._zoom) < 1e-9:
+            return
+        r = self._image_rect()
+        if r.width() <= 0 or r.height() <= 0:
+            return
+        fx = (pos.x() - r.x()) / r.width()
+        fy = (pos.y() - r.y()) / r.height()
+        self._zoom = new_zoom
+        r2 = self._image_rect()   # pan 未变时的新矩形
+        want_x = pos.x() - fx * r2.width()
+        want_y = pos.y() - fy * r2.height()
+        self._pan_x += want_x - r2.x()
+        self._pan_y += want_y - r2.y()
+        self.update()
+
+    def wheelEvent(self, event) -> None:
+        if self._qimg is None:
+            event.ignore()
+            return
+        factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
+        self._zoom_at(QPointF(event.pos()), factor)
+        event.accept()
+
+    def _pan_by(self, pos: QPointF) -> None:
+        """中键拖动平移"""
+        if self._pan_anchor is None:
+            return
+        self._pan_x += pos.x() - self._pan_anchor.x()
+        self._pan_y += pos.y() - self._pan_anchor.y()
+        self._pan_anchor = pos
+        self.update()
 
     def set_brush_size(self, radius: int) -> None:
         """画笔半径（原始图像像素）"""
         self._brush_size = max(1, int(radius))
+        self.update()
+
+    def _brush_radius_px(self) -> float | None:
+        """画笔/橡皮模式下笔尖圆的显示半径（像素）；否则 None。
+
+        笔尖大小 = 原始图像像素 × 当前显示缩放（放大画面时笔尖同步变大）。
+        """
+        if self._qimg is None or self._img_w <= 0:
+            return None
+        if not (self._brush_mode or self._erase_mode):
+            return None
+        r = self._image_rect()
+        if r.width() <= 0 or r.height() <= 0:
+            return None
+        return self._brush_size * r.width() / self._img_w
 
     # ── 遮罩管理（多遮罩：每个蓝框/元素一个）───────────────
     def set_active_mask(self, key: str) -> None:
@@ -124,6 +231,11 @@ class ScreenCanvas(QWidget):
     def get_all_masks(self) -> dict[str, np.ndarray]:
         """所有遮罩 {key: mask}"""
         return dict(self._masks)
+
+    def set_all_masks(self, masks: dict) -> None:
+        """整体恢复遮罩状态（撤回用）：{key: mask} 副本写入"""
+        self._masks = {k: np.array(v, copy=True) for k, v in masks.items()}
+        self.update()
 
     def clear_mask(self, key: str | None = None) -> None:
         """清空遮罩：key=None → 全部清空；指定 key → 清该遮罩"""
@@ -195,6 +307,11 @@ class ScreenCanvas(QWidget):
         """蓝框：整体标识（框内遮罩为一个整体）"""
         return self.add_rect(x, y, w, h, label, COLOR_BLUE, ref)
 
+    def add_yellow(self, x: float, y: float, w: float, h: float,
+                   label: str = "", ref: dict | None = None) -> str:
+        """黄框：OCR 文字位置（需画在蓝框内，相对蓝框匹配点定位）"""
+        return self.add_rect(x, y, w, h, label, COLOR_YELLOW, ref)
+
     # ── 选框编辑 API ─────────────────────────────────────
     def boxes(self) -> list[dict]:
         return list(self._boxes)
@@ -237,9 +354,10 @@ class ScreenCanvas(QWidget):
         w, h = self.width(), self.height()
         if iw <= 0 or ih <= 0 or w <= 0 or h <= 0:
             return QRectF()
-        scale = min(w / iw, h / ih)
+        scale = min(w / iw, h / ih) * self._zoom
         dw, dh = iw * scale, ih * scale
-        return QRectF((w - dw) / 2, (h - dh) / 2, dw, dh)
+        cx, cy = w / 2 + self._pan_x, h / 2 + self._pan_y
+        return QRectF(cx - dw / 2, cy - dh / 2, dw, dh)
 
     def _to_rel(self, pos: QPointF) -> tuple[float, float]:
         r = self._image_rect()
@@ -300,8 +418,17 @@ class ScreenCanvas(QWidget):
         if self._qimg is None:
             return
         pos = QPointF(event.pos())
-        # 1) 画笔优先涂色
-        if self._brush_mode and event.button() == Qt.LeftButton:
+        # 0) 中键 或 ✋拖动模式+左键 → 平移画面
+        if event.button() == Qt.MiddleButton or \
+                (self._pan_mode and event.button() == Qt.LeftButton):
+            self._panning = True
+            self._pan_anchor = pos
+            self.setCursor(Qt.ClosedHandCursor)
+            return
+        # 1) 画笔/橡皮优先
+        if (self._brush_mode or self._erase_mode) \
+                and event.button() == Qt.LeftButton:
+            self.state_mutating.emit()   # 撤回快照（涂色/擦除前）
             self._paint_at(pos)
             return
         # 2) 框选模式：拖出新框（新建优先，点在已有框上也新建）
@@ -320,6 +447,15 @@ class ScreenCanvas(QWidget):
                 self._edit_anchor = pos
                 box = self.box_of(bid)
                 self._edit_orig = list(box["region"]) if box else None
+                self.state_mutating.emit()   # 撤回快照（拉伸前）
+                return
+        # 3.5) 右键命中框 → 上下文菜单（保存为图标/OCR素材/点击点等）
+        if event.button() == Qt.RightButton:
+            bid = self._hit_box(pos)
+            if bid is not None:
+                self._selected_box = bid
+                self.update()
+                self.box_context_requested.emit(bid)
                 return
         # 4) 命中框内部 → 选中 + 拖动
         if event.button() == Qt.LeftButton:
@@ -330,6 +466,7 @@ class ScreenCanvas(QWidget):
                 self._edit_anchor = pos
                 box = self.box_of(bid)
                 self._edit_orig = list(box["region"]) if box else None
+                self.state_mutating.emit()   # 撤回快照（拖动前）
                 self.update()
                 return
         # 5) 空白处 → 点击点（取消选中）
@@ -342,7 +479,15 @@ class ScreenCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = QPointF(event.pos())
-        if self._brush_mode and event.buttons() & Qt.LeftButton:
+        # 画笔/橡皮模式下跟踪鼠标 → 显示笔尖指示圆（PS 风格）
+        if self._brush_mode or self._erase_mode:
+            self._brush_cursor = pos
+            self.update()
+        if self._panning:
+            self._pan_by(pos)
+            return
+        if (self._brush_mode or self._erase_mode) \
+                and event.buttons() & Qt.LeftButton:
             self._paint_at(pos)
             return
         if self._edit_action in ("move", "resize") and event.buttons() & Qt.LeftButton:
@@ -397,7 +542,7 @@ class ScreenCanvas(QWidget):
         self.update()
 
     def _paint_at(self, pos: QPointF) -> None:
-        """在遮罩上涂一个圆（画笔）——涂到当前活动遮罩（蓝框/元素）"""
+        """在遮罩上涂/擦一个圆——当前活动遮罩；橡皮擦模式写 0"""
         if self._img_w <= 0 or self._img_h <= 0:
             return
         p = self._to_img_pos(pos)
@@ -408,10 +553,20 @@ class ScreenCanvas(QWidget):
                                       np.zeros((self._img_h, self._img_w),
                                                dtype=np.uint8))
         import cv2
-        cv2.circle(mask, (p[0], p[1]), self._brush_size, 255, -1)
+        val = 0 if self._erase_mode else 255
+        cv2.circle(mask, (p[0], p[1]), self._brush_size, val, -1)
         self.update()
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._panning and event.button() in (Qt.MiddleButton,
+                                                Qt.LeftButton):
+            self._panning = False
+            self._pan_anchor = None
+            if self._pan_mode:
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.unsetCursor()
+            return
         if self._edit_action in ("move", "resize"):
             self._edit_action = ""
             self._edit_handle = ""
@@ -427,8 +582,15 @@ class ScreenCanvas(QWidget):
             self._drag_rect = None
             self.update()
 
+    def leaveEvent(self, event) -> None:
+        """鼠标离开画布 → 隐藏笔尖指示圆"""
+        if self._brush_cursor is not None:
+            self._brush_cursor = None
+            self.update()
+        super().leaveEvent(event)
+
     def mouseDoubleClickEvent(self, event) -> None:
-        """双击选框 → 请求改名"""
+        """双击选框 → 请求改名；双击空白 → 复位视图（缩放/平移）"""
         if event.button() == Qt.LeftButton:
             bid = self._hit_box(QPointF(event.pos()))
             if bid is not None:
@@ -436,6 +598,8 @@ class ScreenCanvas(QWidget):
                 self.box_rename_requested.emit(bid)
                 self.update()
                 return
+            self.reset_view()
+            return
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event) -> None:
@@ -511,3 +675,18 @@ class ScreenCanvas(QWidget):
             p.setBrush(QColor(255, 200, 60, 40))
             p.drawRect(QRectF(r.x() + x * r.width(), r.y() + y * r.height(),
                               w * r.width(), h * r.height()))
+
+        # 画笔/橡皮笔尖指示圆（PS 风格，2026-08-15）：
+        # 外圈黑边 + 内圈主体色（画笔白 / 橡皮黄），深浅背景都可见
+        if (self._brush_mode or self._erase_mode) and \
+                self._brush_cursor is not None:
+            rad = self._brush_radius_px()
+            if rad is not None and rad > 0:
+                cursor_pos = self._brush_cursor
+                inner = QColor(255, 200, 60) if self._erase_mode \
+                    else QColor(255, 255, 255)
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(QColor(0, 0, 0, 220), 2))
+                p.drawEllipse(cursor_pos, rad, rad)
+                p.setPen(QPen(inner, 1))
+                p.drawEllipse(cursor_pos, rad - 1.5, rad - 1.5)

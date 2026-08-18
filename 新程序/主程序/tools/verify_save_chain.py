@@ -88,8 +88,9 @@ def main():
     check("A2 保存的 config 含修改值(max_daily=8)",
           rec.saved and rec.saved[0][1].get("max_daily") == 8,
           str(rec.saved[0][1].get("max_daily")) if rec.saved else "无")
-    check("A3 保存的 config 含重复规则(loop_count=3)",
-          rec.saved and rec.saved[0][1]["repeat"].get("loop_count") == 3,
+    check("A3 保存的 config 不再写循环次数（变量组覆盖，2026-08-16）",
+          rec.saved and "loop_count" not in rec.saved[0][1]
+          and "loop_count" not in rec.saved[0][1]["repeat"],
           str(rec.saved))
     check("A4 reset_task_cycle 被调（改配置重置周期）",
           rec.reset_cycles == ["t"], str(rec.reset_cycles))

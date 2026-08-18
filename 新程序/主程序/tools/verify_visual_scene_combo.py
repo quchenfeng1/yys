@@ -31,18 +31,20 @@ print("  下拉项:", [items.itemText(i) for i in range(items.count())])
 assert items.count() == 0
 print("  ✅ 无场景时为空（合理：没有可选场景）")
 
-print("[2] 任务 teach 有场景 → 下拉有值")
-# 模拟：示教引擎内存任务添加场景并保存（真实流程：每次指示后 teach.save_task）
+print("[2] 任务素材库有场景 → 下拉有值（只有加入素材库的才出现）")
+# 模拟：示教保存场景后自动加入任务素材库
 teach._task_name = "探测任务"
 teach._task = store.load("探测任务")
 teach._task["teach"]["scenes"].append(
     {"id": "scene_main", "name": "主界面", "judgements": [], "logic": "and"})
-teach.save_task()   # 持久化 → 画布 provider 从 store 读到
+teach._task.setdefault("materials", {})["scenes"] = ["scene_main"]
+teach.save_task()   # 持久化 → 画布 provider 从任务素材库读到
+panel._current_task = teach._task
 c.refresh_combos()
 items2 = sp.get_widget("scene").get_custom_widget()
 print("  下拉项:", [items2.itemText(i) for i in range(items2.count())])
 assert items2.count() == 1 and items2.itemText(0) == "scene_main"
-print("  ✅ 示教场景出现在下拉（实时 provider 生效）")
+print("  ✅ 任务素材库场景出现在下拉")
 
 print("[3] 选中场景并导出验证")
 w.set_value("scene_main")

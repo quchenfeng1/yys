@@ -59,14 +59,14 @@ class GameProfile:
         return self.base / "visual_tasks"
 
     @property
-    def operations_dir(self) -> Path:
-        """游戏内通用操作（4.26）：games/{game}/operations/"""
-        return self.base / "operations"
+    def nodes_dir(self) -> Path:
+        """游戏内通用节点（2026-08-15）：games/{game}/nodes/"""
+        return self.base / "nodes"
 
     @property
-    def shared_operations_dir(self) -> Path:
-        """跨游戏通用操作（4.26）：games/_shared/operations/"""
-        return self.root / "games" / "_shared" / "operations"
+    def shared_nodes_dir(self) -> Path:
+        """跨游戏通用节点（2026-08-15）：games/_shared/nodes/"""
+        return self.root / "games" / "_shared" / "nodes"
 
     @property
     def scenes_dir(self) -> Path:

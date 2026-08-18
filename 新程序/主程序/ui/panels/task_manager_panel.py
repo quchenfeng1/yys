@@ -11,12 +11,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QDialog, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QListWidget, QMessageBox, QPushButton, QScrollArea,
-    QVBoxLayout, QWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 CATEGORIES = ["daily", "permanent", "event", "special"]
@@ -25,7 +25,7 @@ _TASK_TYPE_LABELS = {
     "event_task": "非战斗任务",
     "battle": "战斗任务",
     "generic": "通用任务（不单独执行）",
-    "trigger": "触发任务（特殊条件触发）",
+    "trigger": "触发任务（旧：特殊条件触发，已下线）",
 }
 
 
@@ -115,30 +115,41 @@ class AssetPickerDialog(QDialog):
 
 
 class TaskManagerPanel(QWidget):
-    """任务文件管理面板（列表 + 详情 + 新建/删除/打开/导入导出）"""
+    """任务文件管理面板（列表 + 详情 + 流程示图 + 新建/删除/打开/导入导出）"""
 
-    def __init__(self, param_bridge: Any = None, parent=None):
+    # 后台线程事件 → 主线程 UI 更新（流程示图实时刷新，2026-08-16）
+    _ui_signal = pyqtSignal(object)
+
+    def __init__(self, param_bridge: Any = None, visual_bridge: Any = None,
+                 parent=None):
         super().__init__(parent)
         self._param_bridge = param_bridge
+        self._visual_bridge = visual_bridge  # 流程示图数据源（阶段标签）
         self._current_name: str = ""
-        self._current_is_generic: bool = False
         self._detail_labels: dict[str, QLabel] = {}
+        self._progress_cache: dict[str, dict] = {}  # 任务 → 最近进度快照
+        self._flow_task: str = ""
+        self._ui_signal.connect(lambda fn: fn())
+        # 可视化任务进度事件订阅（任务队列/流程示图共用）
+        try:
+            from core.event_bus import get_global_bus
+            from core.events import Events
+            get_global_bus().subscribe(Events.VISUAL_PROGRESS,
+                                       self._on_visual_progress)
+        except Exception:
+            pass
         # §5.2 图片映射编辑态（ref → 素材路径）与所属任务
         self._images_editing: dict[str, str] = {}
         self._images_task: str = ""
 
         layout = QHBoxLayout(self)
 
-        # ── 左侧任务库 + 通用模块 ─────────────────────────
+        # ── 左侧任务库 ─────────────────────────────────
         left = QVBoxLayout()
         left.addWidget(QLabel("🎮 游戏任务"))
         self.task_list = QListWidget()
         self.task_list.currentItemChanged.connect(self._on_task_selected)
         left.addWidget(self.task_list)
-        left.addWidget(QLabel("🧩 通用模块（不单独执行，被任务引用）"))
-        self.generic_list = QListWidget()
-        self.generic_list.currentItemChanged.connect(self._on_generic_selected)
-        left.addWidget(self.generic_list)
 
         btn_layout = QHBoxLayout()
         btn_new = QPushButton("新建")
@@ -155,15 +166,41 @@ class TaskManagerPanel(QWidget):
             btn_layout.addWidget(b)
         left.addLayout(btn_layout)
 
-        # ── 右侧详情 ──────────────────────────────────────
+        # ── 右侧：任务详情 / 流程示图 ──────────────────
         right = QVBoxLayout()
-        right.addWidget(QLabel("任务详情"))
+        right.addWidget(QLabel("任务信息"))
+        self.tabs = QTabWidget()
+
+        # Tab1 任务详情
+        detail_page = QWidget()
+        dl = QVBoxLayout(detail_page)
+        dl.setContentsMargins(0, 0, 0, 0)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         container = QWidget()
         self.detail_layout = QVBoxLayout(container)
         self.scroll.setWidget(container)
-        right.addWidget(self.scroll, 1)
+        dl.addWidget(self.scroll)
+        self.tabs.addTab(detail_page, "📋 任务详情")
+
+        # Tab2 流程示图（2026-08-16）：阶段标签 o-o-o（不依赖连线）
+        flow_page = QWidget()
+        fl = QVBoxLayout(flow_page)
+        fl.setContentsMargins(8, 8, 8, 8)
+        from ui.panels.progress_thumb import ProgressThumb
+        self._flow_view = ProgressThumb(flow_page)
+        fl.addWidget(self._flow_view, 1)
+        legend = QLabel("● 执行中（蓝）  ● 完成（绿）  ● 失败（红）  ○ 未执行（灰）  "
+                        "— 阶段顺序")
+        legend.setStyleSheet("color:#8a94a6;")
+        fl.addWidget(legend)
+        self._flow_hint = QLabel("")
+        self._flow_hint.setWordWrap(True)
+        self._flow_hint.setStyleSheet("color:#8a94a6; padding:4px;")
+        fl.addWidget(self._flow_hint)
+        self.tabs.addTab(flow_page, "🖼 流程示图")
+
+        right.addWidget(self.tabs, 1)
 
         layout.addLayout(left, 1)
         layout.addLayout(right, 2)
@@ -196,50 +233,14 @@ class TaskManagerPanel(QWidget):
         if self.task_list.count() > 0:
             self.task_list.setCurrentRow(0)
 
-    def load_generic(self, metas: list) -> None:
-        """加载通用模块元数据列表（common，供其他游戏任务引用）"""
-        self.generic_list.blockSignals(True)
-        self.generic_list.clear()
-        for m in metas:
-            if isinstance(m, dict):
-                name = m.get("name", "")
-                display = m.get("display_name", "") or name
-                label = f"{display}  [common]"
-            else:
-                name = str(m)
-                label = name
-            self.generic_list.addItem(label)
-            item = self.generic_list.item(self.generic_list.count() - 1)
-            item.setData(Qt.UserRole, name)
-        self.generic_list.blockSignals(False)
-
-    def _on_generic_selected(self, current, previous) -> None:
-        """选中通用模块 → 显示详情（标注通用·不单独执行）"""
-        if current is None:
-            return
-        name = current.data(Qt.UserRole)
-        if not name:
-            return
-        self._current_name = name
-        self._current_is_generic = True
-        detail = self._get_detail(name)
-        detail.setdefault("is_generic", True)
-        detail.setdefault("category", "common")
-        self._render_detail(detail)
-
     def _refresh(self) -> None:
-        """重新拉取任务库 + 通用模块元数据并刷新列表"""
+        """重新拉取任务库元数据并刷新列表"""
         bridge = self._param_bridge
         if not bridge or not hasattr(bridge, 'task'):
             return
         try:
             metas = bridge.task.get_task_metas()
             self.load_tasks(metas)
-        except Exception:
-            pass
-        try:
-            gmetas = bridge.task.get_generic_modules()
-            self.load_generic(gmetas)
         except Exception:
             pass
 
@@ -252,9 +253,68 @@ class TaskManagerPanel(QWidget):
         if not name:
             return
         self._current_name = name
-        self._current_is_generic = False
         detail = self._get_detail(name)
         self._render_detail(detail)
+        self._refresh_flow_view(name)
+
+    # ── 流程示图（2026-08-16）：阶段标签 o-o-o ───────────────
+
+    def _refresh_flow_view(self, name: str) -> None:
+        """选中任务 → 流程示图：有最近快照回显；否则按阶段标签静态排布。"""
+        self._flow_task = name
+        cached = self._progress_cache.get(name)
+        if cached:
+            self._flow_view.update_snapshot(cached)
+            self._flow_hint.setText("（最近一次运行快照）")
+            return
+        layout = {"points": [], "edges": []}
+        vb = self._visual_bridge
+        if vb is not None and hasattr(vb, "load_task"):
+            try:
+                task = vb.load_task(name) or {}
+                from visual import visual_schema as vs
+                groups = vs.stage_tags(task)
+                if groups:
+                    from visual.progress_tracker import build_progress_layout
+                    layout = build_progress_layout(
+                        task.get("graph", {}), groups, ordered=True)
+            except Exception:
+                pass
+        if layout["points"]:
+            self._flow_view.update_snapshot({
+                "task_id": name, "points": layout["points"],
+                "states": {}, "edges": layout["edges"],
+            })
+            self._flow_hint.setText(
+                "流程示图：框选设为阶段的节点组（按阶段顺序展示，可不相连）")
+        else:
+            self._flow_view.update_snapshot(None)
+            self._flow_hint.setText(
+                "（暂无阶段标签——在可视化构建中框选节点，右键「将节点组合封装为标签」，"
+                "再右键标签内部「设为阶段」）")
+
+    def _on_visual_progress(self, **kw) -> None:
+        """（后台线程）进度快照 → 缓存 + 投递主线程"""
+        try:
+            task_id = kw.get("task_id", "")
+            if not task_id:
+                return
+            snap = {k: kw[k] for k in
+                    ("task_id", "current", "points", "states", "edges")
+                    if k in kw}
+            self._progress_cache[task_id] = snap
+            self._ui_signal.emit(lambda: self._ui_visual_progress(snap))
+        except Exception:
+            pass
+
+    def _ui_visual_progress(self, snap: dict) -> None:
+        """（主线程）当前选中任务快照 → 流程示图"""
+        if snap.get("task_id") != self._flow_task:
+            return
+        try:
+            self._flow_view.update_snapshot(snap)
+        except Exception:
+            pass
 
     def _get_detail(self, name: str) -> dict[str, Any]:
         bridge = self._param_bridge
@@ -276,7 +336,6 @@ class TaskManagerPanel(QWidget):
 
         name = detail.get("name", "")
         display = detail.get("display_name", "") or name
-        is_generic = self._current_is_generic or detail.get("is_generic")
 
         title = QLabel(f"📋 {display}")
         title.setStyleSheet("font-size:16px; font-weight:bold;")
@@ -288,12 +347,10 @@ class TaskManagerPanel(QWidget):
         meta_content.addLayout(form)
         task_type = detail.get("task_type", "")
         type_label = _TASK_TYPE_LABELS.get(task_type, task_type)
-        if is_generic:
-            type_label = "通用模块（不单独执行，被任务引用）"
         rows = [
             ("文件名:", name),
             ("显示名:", display),
-            ("分类:", "通用模块（common）" if is_generic else detail.get("category", "")),
+            ("分类:", detail.get("category", "")),
             ("任务类型:", type_label),
             ("描述:", detail.get("description", "")),
             ("战斗任务:", "是" if detail.get("uses_battle") else "否"),
@@ -414,14 +471,10 @@ class TaskManagerPanel(QWidget):
         display, ok2 = QInputDialog.getText(self, "新建任务", "显示名（可留空）:")
         if not ok2:
             return
-        # 通用任务固定放 common/（不单独执行）；其余选择分类
-        if task_type == "generic":
-            category = "common"
-        else:
-            category, ok3 = QInputDialog.getItem(self, "新建任务", "分类:",
-                                                 CATEGORIES, 0, False)
-            if not ok3:
-                return
+        category, ok3 = QInputDialog.getItem(self, "新建任务", "分类:",
+                                             CATEGORIES, 0, False)
+        if not ok3:
+            return
         try:
             bridge.task.new_task(category, name.strip(), display.strip(), task_type=task_type)
             self._refresh()

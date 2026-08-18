@@ -52,7 +52,14 @@ class AntiDetect:
         max_interval: float | None = None,
         action_jitter: bool = True,
         random_fail_rate: float = 0.02,
+        enabled: bool = True,
     ):
+        """
+        enabled=False（对应 global.yaml anti_detect.enabled）：
+        切换到 debug 档案（零点击偏移/零走神/零参数漂移），
+        由 bootstrap 同时把 min/max_interval 传 0、jitter/失败率传 0，
+        实现「启用防封」开关真正生效。
+        """
         self._event_bus = event_bus or get_global_bus()
         self._bus = self._event_bus  # 兼容别名
         self._monitor = monitor
@@ -68,6 +75,12 @@ class AntiDetect:
         # 行为档案
         self._profile_name: str = "normal"
         self._profile_params: dict[str, float] = dict(PROFILES["normal"])
+
+        # 关闭防封（2026-08-16）：debug 档案 = 零偏移/零走神/零漂移
+        self._enabled: bool = enabled
+        if not enabled:
+            self._profile_name = "debug"
+            self._profile_params = dict(PROFILES["debug"])
 
         # 运行时参数（从 profile_params 加载，受漂移影响）
         self._offset_radius: float = self._profile_params["offset_radius"]
@@ -121,6 +134,11 @@ class AntiDetect:
     @property
     def current_profile(self) -> str:
         return self._profile_name
+
+    @property
+    def is_enabled(self) -> bool:
+        """防封是否启用（global.yaml anti_detect.enabled）"""
+        return self._enabled
 
     @property
     def risk_level(self) -> int:

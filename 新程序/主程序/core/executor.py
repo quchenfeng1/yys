@@ -274,11 +274,15 @@ class Executor:
 
     def click_position(self, x: int, y: int) -> None:
         """点击指定坐标（§5.3 click_point 的别名）
-        以 10px 矩形做微小偏移，避免每次点击同一像素点。
+        以 10px 矩形做微小偏移，避免每次点击同一像素点；
+        防封关闭时点原始坐标。
         """
         self._anti_detect.wait_if_needed()
         # §5.3 要求 random_offset_in_bounds(cx, cy, 10, 10)
-        ox, oy = self._anti_detect.random_offset_in_bounds(x, y, 10, 10)
+        if getattr(self._anti_detect, 'is_enabled', True):
+            ox, oy = self._anti_detect.random_offset_in_bounds(x, y, 10, 10)
+        else:
+            ox, oy = x, y
 
         if self._dry_run_event.is_set():
             self._record_operation(template="click_position",
@@ -425,16 +429,15 @@ class Executor:
         return self._current_signal
 
     def _publish_signal(self, rel: str) -> None:
-        """识图素材命中 → 若配置了 signal 则发布 SCENE_SIGNAL 并记录 current_signal"""
+        """识图素材命中 → 记录 current_signal（2026-08-16 退役：不再对外发布 SCENE_SIGNAL）。
+
+        旧链路（SCENE_SIGNAL → 截屏触发体系）已下线：新体系 = 可视化任务内
+        场景信号接收/任务信号输出节点；老任务脚本仍可用 current_signal/wait_signal。
+        """
         signal = self._signal_map.get(rel)
         if not signal:
             return
         self._current_signal = signal
-        try:
-            self._bus.publish(Events.SCENE_SIGNAL, source="executor",
-                              signal=signal, rel=rel)
-        except Exception:
-            pass
 
     def wait_signal(self, name: str, timeout: float = 30.0,
                     interval: float = 0.5,

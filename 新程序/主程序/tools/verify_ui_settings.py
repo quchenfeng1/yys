@@ -82,7 +82,7 @@ def main():
     keys = [k for k, _, _ in _PANEL_TOGGLE_ITEMS]
     check("⑦ 设置面板不可隐藏", "config" not in keys, str(keys))
     check("⑦ 其余面板可隐藏", {"game_task", "task_queue", "task_manager",
-                            "image", "accounts", "history"} <= set(keys))
+                            "image", "accounts", "emulators"} <= set(keys))
 
     print(f"\n🎉 UI 设置联动与日志筛选验证 {PASS} 项通过")
 

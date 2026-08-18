@@ -61,10 +61,16 @@ def verify_taskstep_construct() -> None:
     check("timeout 继承类属性(30)", s.timeout == 30, f"实际 {s.timeout}")
     check("execute 返回成功", s.execute().success)
 
-    # 显式传参仍兼容（通用模块写法）
-    from games.yys.tasks.common.close_popup import ClosePopup
-    cp = ClosePopup(step_id="close_popup")
-    check("显式 step_id 兼容", cp.step_id == "close_popup", f"实际 {cp.step_id}")
+    # 显式传参仍兼容（通用模块写法；coop 三件套已删除，用匿名子类验证）
+    class LegacyStep(TaskStep):
+        name = "legacy_step"
+        is_generic = True
+
+        def execute(self, context=None):
+            return StepResult.success("ok")
+
+    cp = LegacyStep(step_id="custom_step")
+    check("显式 step_id 兼容", cp.step_id == "custom_step", f"实际 {cp.step_id}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -348,47 +354,8 @@ def verify_advance_logic() -> None:
               f"实际 {nrt4} delta={delta4:.0f}s")
 
 
-def verify_battle_loop_resume() -> None:
-    print("\n[7/7] BattleLoop 断点续跑（20/100 → 再执行 80 场）")
-    from tasks.base.task_context import TaskContext
-    from games.yys.tasks.common.battle_loop import BattleLoop
-
-    # ① 有进度 20/100 → 从 20 继续，再执行 80 场
-    calls: list = []
-    state = {"t1": {"completed": 20, "total": 100, "updated": ""}}
-
-    def saver(tid, c, t):
-        calls.append((tid, c, t))
-
-    ctx = TaskContext(task_id="t1", state=state, progress_saver=saver)
-    bl = BattleLoop(step_id="battle", max_battles=100, wait_time=0)
-    result = bl.execute(ctx)
-    check("断点恢复：从20继续打到100", state["t1"]["completed"] == 100,
-          f"实际 completed={state['t1'].get('completed')}")
-    check("再执行 80 场（每场一次持久化）", len(calls) == 80, f"实际 {len(calls)}")
-    check("返回成功", result.success, f"实际 {result}")
-
-    # ② 无进度 → 从 0 开始 100 场
-    calls2: list = []
-    ctx2 = TaskContext(task_id="t2", state={},
-                       progress_saver=lambda *a: calls2.append(a))
-    bl2 = BattleLoop(step_id="battle", max_battles=100, wait_time=0)
-    bl2.execute(ctx2)
-    check("无进度从0开始100场", len(calls2) == 100, f"实际 {len(calls2)}")
-
-    # ③ 无限循环（max_battles=0）在中断时退出
-    import threading
-    stop = threading.Event()
-    calls3: list = []
-    ctx3 = TaskContext(task_id="t3", state={}, stop_event=stop,
-                       progress_saver=lambda *a: (calls3.append(a), stop.set()))
-    bl3 = BattleLoop(step_id="battle", max_battles=0, wait_time=0)
-    r3 = bl3.execute(ctx3)
-    check("无限循环可被中断", r3.status.value in ("success", "skip"), f"实际 {r3}")
-
-
 def verify_initial_window() -> None:
-    print("\n[8/8] get_initial_next_run 窗口修正（配置在窗口内立即执行）")
+    print("\n[7/7] get_initial_next_run 窗口修正（配置在窗口内立即执行）")
     from core.repeat_rule import RepeatRule, TZ_UTC8
 
     def tz(hh, mm, day_off=0):
@@ -435,7 +402,7 @@ def verify_initial_window() -> None:
 
 
 def verify_reload_advance() -> None:
-    print("\n[9/9] 保存后 reload 提前评估（窗口内未执行 → 提前到当前）")
+    print("\n[8/8] 保存后 reload 提前评估（窗口内未执行 → 提前到当前）")
     from core.config_manager import ConfigManager
     from core.scheduler import Scheduler
     from core.task_state import TaskStateStore
@@ -505,7 +472,6 @@ def main() -> int:
     verify_task_config_injection()
     verify_total_count_and_time_window()
     verify_advance_logic()
-    verify_battle_loop_resume()
     verify_initial_window()
     verify_reload_advance()
 

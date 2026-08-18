@@ -1,0 +1,6 @@
+STEP A
+STEP B
+STEP C
+STEP D
+TOTAL 20/20
+🎉 信号体系 UI 三件套冒烟全部通过

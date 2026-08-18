@@ -123,22 +123,22 @@ def main():
     check("面板含 sub7 行", "sub7" in panel._row_by_id)
 
     # ════════════ 6. game_task_panel 组队下拉联动 ════════════
-    print("\n── [6/6] 组队多选下拉读取新增小号 ──")
+    print("\n── [6/6] 组队 UI 已取消（2026-08-16，业务参数由变量/常量承载）──")
     from ui.panels.game_task_panel import GameTaskPanel
     gpanel = GameTaskPanel(param_bridge=pbridge)
     opts = gpanel._get_sub_options()
-    check("组队下拉读到全部小号（sub1, sub7）",
+    check("_get_sub_options 读到全部小号（sub1, sub7）",
           [d for d, _ in opts] == ["sub1", "sub7"], str(opts))
     gpanel._render_form({
         "name": "combat_test", "display_name": "战斗测试", "task_type": "battle",
         "uses_battle": True, "loop_count": 3, "teaming": {"sub_ids": ["sub7"]},
     })
-    from ui.widgets.multi_select_combo import MultiSelectCombo
     w = gpanel._form_widgets
-    check("渲染出多选下拉且回显 sub7",
-          isinstance(w.get("teaming_sub_ids"), MultiSelectCombo)
-          and w["teaming_sub_ids"].selected_data() == ["sub7"],
-          str(w["teaming_sub_ids"].selected_data()) if isinstance(w.get("teaming_sub_ids"), MultiSelectCombo) else "非多选下拉")
+    check("组队下拉控件已取消（战斗配置移除）",
+          "teaming_sub_ids" not in w,
+          str([k for k in w if "team" in k]))
+    cfg = gpanel._collect_config()
+    check("config 不再收集 teaming", "teaming" not in cfg, str(cfg))
 
     # 清理
     shutil.rmtree(tmp, ignore_errors=True)

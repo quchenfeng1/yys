@@ -93,20 +93,37 @@ class OcrLocator:
                 raise
 
     def _init_paddle(self) -> None:
-        """初始化 PaddleOCR"""
+        """初始化 PaddleOCR（兼容 2.x 与 3.x 两套构造参数）"""
         try:
+            import paddleocr
             from paddleocr import PaddleOCR
-
-            self._engine = PaddleOCR(
-                use_angle_cls=True,
-                lang=self._lang,
-                use_gpu=self._use_gpu,
-                show_log=False,
-            )
         except ImportError:
             raise ImportError(
                 "PaddleOCR 未安装。请运行: pip install paddleocr"
             )
+        try:
+            major = int(str(getattr(paddleocr, "__version__", "0")).split(".")[0])
+        except Exception:
+            major = 0
+        if major >= 3:
+            # 3.x：use_angle_cls 经废弃映射转 use_textline_orientation；
+            # device 取代 use_gpu；show_log 已被移除；
+            # enable_mkldnn=False 规避 Paddle 3.3 oneDNN 静态图属性转换 bug
+            kwargs: dict = {
+                "lang": self._lang,
+                "device": "gpu" if self._use_gpu else "cpu",
+                "use_angle_cls": True,
+                "enable_mkldnn": False,
+            }
+        else:
+            # 2.x 原始参数
+            kwargs = {
+                "use_angle_cls": True,
+                "lang": self._lang,
+                "use_gpu": self._use_gpu,
+                "show_log": False,
+            }
+        self._engine = PaddleOCR(**kwargs)
 
     def _init_easyocr(self) -> None:
         """初始化 EasyOCR"""
@@ -134,34 +151,85 @@ class OcrLocator:
             return []
 
     def _predict_paddle(self, image: np.ndarray) -> list[OCRResult]:
-        """PaddleOCR 预测"""
+        """PaddleOCR 预测（兼容 2.x 元组与 3.x dict/Result 两种返回格式）"""
         if self._engine is None:
             return []
 
-        result = self._engine.ocr(image, cls=True)
+        try:
+            result = self._engine.ocr(image, cls=True)
+        except TypeError:
+            result = self._engine.ocr(image)
         parsed: list[OCRResult] = []
 
-        if not result or not result[0]:
+        if not result:
             return parsed
 
-        for line in result[0]:
-            box, (text, confidence) = line
-            # box: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+        # 3.x：每张图返回一个 dict（rec_texts/rec_scores/rec_polys）或 Result 对象
+        r0 = result[0] if isinstance(result, (list, tuple)) and len(result) else None
+        if isinstance(r0, dict) or hasattr(r0, "rec_texts"):
+            for item in result:
+                self._parse_paddle_v3(item, parsed)
+            return parsed
+
+        # 2.x：result[0] = [ [[x,y]x4], ("text", score) ], ...
+        lines = result[0] if isinstance(result, (list, tuple)) and len(result) else []
+        for line in lines or []:
+            try:
+                box, (text, confidence) = line
+            except Exception:
+                continue
             xs = [p[0] for p in box]
             ys = [p[1] for p in box]
-            x, y = int(min(xs)), int(min(ys))
-            w, h = int(max(xs) - min(xs)), int(max(ys) - min(ys))
-
             parsed.append(OCRResult(
-                text=text,
+                text=str(text),
                 confidence=float(confidence),
-                x=x,
-                y=y,
-                width=w,
-                height=h,
+                x=int(min(xs)),
+                y=int(min(ys)),
+                width=int(max(xs) - min(xs)),
+                height=int(max(ys) - min(ys)),
             ))
-
         return parsed
+
+    @staticmethod
+    def _parse_paddle_v3(item: Any, parsed: list[OCRResult]) -> None:
+        """解析 PaddleOCR 3.x 单图结果（dict 或 Result 对象）"""
+        def _get(key, default):
+            if isinstance(item, dict):
+                return item.get(key, default)
+            return getattr(item, key, default)
+        texts = _get("rec_texts", []) or []
+        scores = _get("rec_scores", []) or []
+        polys = (_get("rec_polys", None) or _get("dt_polys", None)
+                 or _get("rec_boxes", None) or [])
+        for i, text in enumerate(texts):
+            try:
+                conf = float(scores[i]) if i < len(scores) else 0.0
+            except Exception:
+                conf = 0.0
+            xs: list[int] = []
+            ys: list[int] = []
+            if i < len(polys) and polys[i] is not None:
+                try:
+                    arr = np.asarray(polys[i], dtype=float).reshape(-1, 2)
+                    xs = [int(v) for v in arr[:, 0]]
+                    ys = [int(v) for v in arr[:, 1]]
+                except Exception:
+                    pass
+            if xs:
+                parsed.append(OCRResult(
+                    text=str(text),
+                    confidence=conf,
+                    x=min(xs),
+                    y=min(ys),
+                    width=max(xs) - min(xs),
+                    height=max(ys) - min(ys),
+                ))
+            else:
+                parsed.append(OCRResult(
+                    text=str(text),
+                    confidence=conf,
+                    x=0, y=0, width=0, height=0,
+                ))
 
     def _predict_easyocr(self, image: np.ndarray) -> list[OCRResult]:
         """EasyOCR 预测"""

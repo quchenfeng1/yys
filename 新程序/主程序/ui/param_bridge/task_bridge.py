@@ -47,7 +47,11 @@ class TaskBridge:
         return names
 
     def get_task_metas(self) -> list[dict[str, Any]]:
-        """获取任务文件元数据列表（含 uses_* 声明，设计书 §4.3，供 UI 动态表单）"""
+        """获取任务文件元数据列表（含 uses_* 声明，设计书 §4.3，供 UI 动态表单）。
+
+        2026-08-16：合并可视化任务（registry 中带 _definition 的实例），
+        让可视化任务出现在游戏任务列表/任务管理中。
+        """
         metas: list[dict[str, Any]] = []
         if self._file_mgr and hasattr(self._file_mgr, 'get_all_tasks'):
             for m in self._file_mgr.get_all_tasks():
@@ -64,6 +68,33 @@ class TaskBridge:
                     "loop_count": getattr(m, 'loop_count', 1),
                     "timeout": getattr(m, 'timeout', 300),
                 })
+        # 可视化任务（已注册进执行引擎，但不在任务文件目录）
+        seen = {m["name"] for m in metas}
+        if self._registry and hasattr(self._registry, 'get_all'):
+            try:
+                for t in self._registry.get_all():
+                    if getattr(t, '_definition', None) is None:
+                        continue
+                    tid = getattr(t, 'task_id', '') or getattr(t, 'name', '')
+                    if not tid or tid in seen:
+                        continue
+                    defn = t._definition or {}
+                    metas.append({
+                        "name": tid,
+                        "display_name": defn.get("display_name", "") or tid,
+                        "description": defn.get("description", ""),
+                        "category": defn.get("category", "daily"),
+                        "task_type": "visual_task",
+                        "is_visual": True,
+                        "uses_battle": False,
+                        "uses_team": False,
+                        "uses_soul": False,
+                        "uses_stamina": False,
+                        "loop_count": 1,
+                        "timeout": 300,
+                    })
+            except Exception:
+                pass
         return metas
 
     def get_generic_modules(self) -> list[dict[str, Any]]:
@@ -114,6 +145,21 @@ class TaskBridge:
                     "loop_count": getattr(meta, 'loop_count', 1),
                     "timeout": getattr(meta, 'timeout', 300),
                 })
+
+        # ①b 可视化任务（registry 实例带 _definition）→ 补显示名/分类
+        if not detail.get("display_name") and self._registry is not None:
+            try:
+                inst = self._registry.get(name)
+                defn = getattr(inst, '_definition', None)
+                if defn is not None:
+                    detail.update({
+                        "display_name": defn.get("display_name", "") or name,
+                        "category": defn.get("category", "daily"),
+                        "task_type": "visual_task",
+                        "is_visual": True,
+                    })
+            except Exception:
+                pass
 
         # ② tasks.yaml 配置（调度字段，设计书 §5.1）
         if self._config and hasattr(self._config, 'get_task_config'):
@@ -258,6 +304,21 @@ class TaskBridge:
         """待执行任务列表（due，供 UI 队列面板「待执行」区域）"""
         if self._scheduler and hasattr(self._scheduler, 'get_due_tasks'):
             return self._scheduler.get_due_tasks()
+        return []
+
+    def get_pending_trigger_tasks(self) -> list[dict[str, Any]]:
+        """待触发任务列表（2026-08-16 信号体系，供队列面板「待触发」区）。"""
+        if self._scheduler and hasattr(self._scheduler, 'get_pending_trigger_tasks'):
+            try:
+                return [
+                    {"name": t.name,
+                     "next_run": t.next_run.strftime("%m-%d %H:%M")
+                     if getattr(t, 'next_run', None) else "",
+                     "priority": getattr(t, 'priority', 10) or 10}
+                    for t in self._scheduler.get_pending_trigger_tasks()
+                ]
+            except Exception:
+                return []
         return []
 
     def get_invalid_tasks(self) -> list[dict[str, Any]]:

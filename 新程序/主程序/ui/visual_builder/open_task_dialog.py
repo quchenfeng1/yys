@@ -2,11 +2,11 @@
 17-可视化构建模块：打开任务弹窗（OpenTaskDialog）。
 
 布局（单游戏，游戏由外部顶部下拉决定）：
-- 两个 Tab —— 「通用操作」（通用节点）/「游戏任务」
+- 游戏任务列表（2026-08-15：通用操作体系已移除，改为框选封装→通用节点）
 - 底部：＋新增 / 📂 打开 / 取消
 
 交互：
-- 新增：在选中 Tab 的列表中添加（不打开）
+- 新增：在列表中新建（不打开）
 - 打开 / 双击：返回 (game_id, kind, name)，由调用方加载到画布编辑
 """
 from __future__ import annotations
@@ -15,17 +15,16 @@ from pathlib import Path
 from typing import Any
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QDialog, QHBoxLayout, QInputDialog, QLabel,
+from PyQt5.QtWidgets import (QDialog, QHBoxLayout, QInputDialog,
                              QListWidget, QListWidgetItem, QMessageBox,
-                             QPushButton, QTabWidget, QVBoxLayout)
+                             QPushButton, QVBoxLayout)
 
 from core.game_profile import scan_games
-from visual.operation_store import OperationStore
 from visual.rule_store import VisualTaskStore
 
 
 class OpenTaskDialog(QDialog):
-    """打开任务 / 通用操作 弹窗（按外部指定的游戏）"""
+    """打开任务弹窗（按外部指定的游戏）"""
 
     def __init__(self, profile, game_id: str, parent=None):
         super().__init__(parent)
@@ -40,18 +39,11 @@ class OpenTaskDialog(QDialog):
 
         lay = QVBoxLayout(self)
 
-        # ── 通用操作 / 游戏任务 Tab ─────────────────────
-        self._tabs = QTabWidget()
-        self._op_list = QListWidget()
-        self._op_list.itemDoubleClicked.connect(lambda i: self._open())
-        self._op_list.setToolTip("通用操作（通用节点）— 双击打开编辑")
+        # ── 游戏任务列表（2026-08-15：通用操作 Tab 已移除，改框选封装→通用节点）──
         self._task_list = QListWidget()
         self._task_list.itemDoubleClicked.connect(lambda i: self._open())
         self._task_list.setToolTip("游戏任务 — 双击打开编辑")
-        self._tabs.addTab(self._op_list, "通用操作")
-        self._tabs.addTab(self._task_list, "游戏任务")
-        self._tabs.currentChanged.connect(lambda _: self._refresh_current())
-        lay.addWidget(self._tabs, 1)
+        lay.addWidget(self._task_list, 1)
 
         # ── 底部按钮 ────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -85,19 +77,16 @@ class OpenTaskDialog(QDialog):
         return self._selected
 
     def current_kind(self) -> str:
-        return "operation" if self._tabs.currentIndex() == 0 else "task"
+        return "task"   # 2026-08-15：通用操作体系已移除
 
     def current_list(self) -> QListWidget:
-        return self._op_list if self.current_kind() == "operation" \
-            else self._task_list
+        return self._task_list
 
     def _store_for(self, game_id: str, kind: str) -> Any:
-        """按游戏+类型构造存储（自包含，不依赖当前 bridge）"""
+        """按游戏构造任务存储（自包含，不依赖当前 bridge）"""
         gp = self._game()
         if gp is None:
             raise FileNotFoundError(f"游戏不存在: {game_id}")
-        if kind == "operation":
-            return OperationStore([gp.shared_operations_dir, gp.operations_dir])
         return VisualTaskStore(gp.visual_tasks_dir)
 
     # ── 刷新 ─────────────────────────────────────────────
@@ -115,13 +104,10 @@ class OpenTaskDialog(QDialog):
                 f"{meta.get('display_name', meta['name'])}"
                 f"（{meta['name']}）")
             item.setData(Qt.UserRole, meta["name"])
-            item.setToolTip(
-                f"节点:{meta.get('node_count', 0)} "
-                f"{'输入:' + str(meta.get('input_count', 0)) if kind == 'operation' else ''}")
+            item.setToolTip(f"节点:{meta.get('node_count', 0)}")
             lst.addItem(item)
         if not metas:
-            it = QListWidgetItem(f"（暂无{'通用操作' if kind == 'operation' else '游戏任务'}"
-                                 f"— 点「＋ 新增」创建）")
+            it = QListWidgetItem("（暂无游戏任务 — 点「＋ 新增」创建）")
             it.setFlags(Qt.NoItemFlags)
             lst.addItem(it)
 
@@ -133,8 +119,7 @@ class OpenTaskDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "失败", str(e))
             return
-        hint = "操作名（英文，如 configure_team）" if kind == "operation" \
-            else "任务名（英文，如 farm_soul）"
+        hint = "任务名（英文，如 farm_soul）"
         name, ok = QInputDialog.getText(self, "新增", f"{hint}:")
         if not ok or not name.strip():
             return

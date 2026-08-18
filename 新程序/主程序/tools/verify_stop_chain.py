@@ -180,7 +180,7 @@ def main():
     # ═══ ③ UI 按钮恢复（模拟 MainWindow._on_run_stopped） ═══
     cb.set_running(False)
     check("③ 启动按钮恢复", cb.btn_start.isEnabled())
-    check("③ 沙盒恢复", cb.chk_dry_run.isEnabled())
+    check("③ 游戏下拉恢复", cb.combo_game.isEnabled())
     check("③ 停止按钮禁用", not cb.btn_stop.isEnabled())
     check("③ 暂停按钮禁用", not cb.btn_pause.isEnabled())
 
@@ -234,8 +234,10 @@ def main():
     wait_until(lambda: sm.get_state("run_status") == "stopped", timeout=6.0)
     check("⑨ 停止后线程退出", ctrl._executor_thread is None or not ctrl._executor_thread.is_alive())
     check("⑨ 长任务被 mark_done", ("task_long", True) in sched.marked, str(sched.marked))
-    hist = sm.get_state("execution_history", [])
-    check("⑨ 执行历史含 task_long", any(r["task_name"] == "task_long" for r in hist), str(hist))
+    _stats = getattr(mon, "_task_stats", {})
+    check("⑨ 长任务完成统计已记录",
+          _stats.get("task_long") is not None and _stats["task_long"].total >= 1,
+          str(getattr(_stats.get("task_long"), "total", None)))
 
     # ═══ ⑩ 暂停中停止 ═══
     cb.set_running(False)  # 模拟 ⑨ 停止后复位，确保启动按钮可用

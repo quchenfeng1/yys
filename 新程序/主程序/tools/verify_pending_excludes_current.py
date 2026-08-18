@@ -58,8 +58,12 @@ class FakeSignal:
 class FakePanel:
     def __init__(self, calls):
         self._calls = calls
-    def update_panel(self, current, pending, upcoming, invalid):
-        self._calls["update_panel"] = (current, list(pending), list(upcoming), list(invalid))
+
+    def update_panel(self, current, pending, upcoming, invalid,
+                     trigger=None, paused=None):
+        self._calls["update_panel"] = (current, list(pending),
+                                       list(upcoming), list(invalid),
+                                       list(trigger or []), list(paused or []))
 
 
 def _names(items):
@@ -97,7 +101,7 @@ def main():
     mw.ui_update = FakeSignal([])
     mw._refresh_queue_panel()
 
-    current, pending, _, _ = calls["update_panel"]
+    current, pending, _, _, _, _ = calls["update_panel"]
     pending_names = _names(pending)
     assert current == "once_test", f"current 应为 once_test: {current}"
     assert "once_test" not in pending_names, f"执行中任务不应在待执行区: {pending_names}"
@@ -108,7 +112,7 @@ def main():
     mw._param_bridge = FakeBridge(
         FakeRun(current=None, queue=["manual_trigger_test"]), FakeTask(s))
     mw._refresh_queue_panel()
-    _, pending2, _, _ = calls["update_panel"]
+    _, pending2, _, _, _, _ = calls["update_panel"]
     assert "manual_trigger_test" in _names(pending2), f"无执行中时待执行区应正常: {_names(pending2)}"
     print(f"③ PASS 无执行中任务时待执行区正常: {_names(pending2)}")
 

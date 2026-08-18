@@ -30,6 +30,14 @@ def _make_template(name: str, size: tuple[int, int], seed: int) -> np.ndarray:
     return img
 
 
+def _write_png(path, img: np.ndarray) -> None:
+    """中文路径安全写图（cv2.imwrite 在 Windows 对非 ASCII 路径静默失败）。"""
+    ok, buf = cv2.imencode(".png", img)
+    if not ok:
+        raise RuntimeError(f"imencode 失败: {path}")
+    buf.tofile(str(path))
+
+
 class MockConnection:
     """模拟设备：合成截图（含素材模板）+ 记录点击"""
     SCREEN_W, SCREEN_H = 1080, 1920
@@ -87,10 +95,10 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="signal_"))
     assets = tmp / "assets"
     (assets / "scene").mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(assets / "scene" / "主界面.png"),
-                _make_template("scene/主界面", (200, 80), 11))
-    cv2.imwrite(str(assets / "scene" / "战斗界面.png"),
-                _make_template("scene/战斗界面", (200, 80), 12))
+    _write_png(assets / "scene" / "主界面.png",
+               _make_template("scene/主界面", (200, 80), 11))
+    _write_png(assets / "scene" / "战斗界面.png",
+               _make_template("scene/战斗界面", (200, 80), 12))
 
     # ════════════ 1. AssetMetaStore.signal ════════════
     print("\n── [1/5] AssetMetaStore 信号字段 ──")
@@ -113,8 +121,8 @@ def main():
     meta2 = AssetMetaStore(assets)
     check("信号持久化重载", meta2.get_signal("scene/主界面.png") == "主界面")
 
-    # ════════════ 2. Executor 识别命中发布信号 ════════════
-    print("\n── [2/5] Executor 识别命中 → SCENE_SIGNAL ──")
+    # ════════════ 2. Executor 识别命中 → current_signal（SCENE_SIGNAL 已退役） ════════════
+    print("\n── [2/5] Executor 识别命中（SCENE_SIGNAL 已退役不再发布） ──")
     from core.recognizer import Recognizer
     from core.anti_detect import AntiDetect
     from core.executor import Executor
@@ -122,7 +130,11 @@ def main():
 
     templates = {}
     for p in assets.rglob("*.png"):
-        templates[str(p.relative_to(assets)).replace("\\", "/").rsplit(".", 1)[0]] = cv2.imread(str(p))
+        key = str(p.relative_to(assets)).replace("\\", "/").rsplit(".", 1)[0]
+        buf = np.fromfile(str(p), dtype=np.uint8)
+        img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        if img is not None:
+            templates[key] = img
     conn = MockConnection(templates)
     rec = Recognizer(asset_dir=str(assets), connection=conn,
                      screenshot_ttl=0.05, result_cache_ttl=0.01)
@@ -136,13 +148,15 @@ def main():
     check("detect_scene 命中主界面", scene == "scene/主界面", str(scene))
     import time as _t
     _t.sleep(0.5)  # 等待 EventBus 异步分发
-    check("命中后发布 SCENE_SIGNAL(主界面)", "主界面" in signals, str(signals))
+    check("退役：命中后不发布 SCENE_SIGNAL", signals == [], str(signals))
     check("current_signal 记录", ex.current_signal == "主界面", str(ex.current_signal))
 
     ok_ens = ex.ensure_scene("scene/战斗界面", timeout=2)
     check("ensure_scene 命中战斗界面", ok_ens)
     _t.sleep(0.5)
-    check("ensure_scene 发布 SCENE_SIGNAL(战斗界面)", "战斗界面" in signals, str(signals))
+    check("退役：ensure_scene 不发布 SCENE_SIGNAL", signals == [], str(signals))
+    check("current_signal 更新为战斗界面",
+          ex.current_signal == "战斗界面", str(ex.current_signal))
 
     # ════════════ 3. Executor.wait_signal ════════════
     print("\n── [3/5] Executor.wait_signal ──")
@@ -184,18 +198,30 @@ def main():
           [t for _, ts in trigger_tasks for t in ts] == ["scene/主界面", "scene/主界面"],
           str(trigger_tasks))
 
-    # ════════════ 5. 触发任务入队链路（TriggerWatcher → 事件） ════════════
-    print("\n── [5/5] 触发任务信号触发链路 ──")
-    from core.trigger_watcher import TriggerWatcher
-    tw = TriggerWatcher(recognizer=rec, connection=conn, event_bus=ex._bus, interval=0.2)
-    detected = []
-    ex._bus.subscribe(Events.TRIGGER_DETECTED, lambda **kw: detected.append(kw))
-    tw.start([("task_a", ["scene/主界面"])])
-    import time
-    time.sleep(0.6)
-    tw.stop()
-    check("TriggerWatcher 命中 scene/主界面 → trigger_detected",
-          any(d.get("task_name") == "task_a" for d in detected), str(detected))
+    # ════════════ 5. 退役：新任务不可再创建 trigger 类型 ════════════
+    print("\n── [5/5] 退役：trigger 下拉移除 + 旧配置兼容 ──")
+    from ui.panels.game_task_panel import GameTaskPanel
+    panel = GameTaskPanel()
+    panel._render_form({"name": "t", "display_name": "t",
+                        "task_type": "special", "enabled": True,
+                        "repeat": {"type": "daily"}})
+    cb = panel._form_widgets["repeat_type"]
+    check("下拉无 trigger 选项", cb.findData("trigger") < 0,
+          str([cb.itemData(i) for i in range(cb.count())]))
+    # 旧 trigger 配置兼容：回显「已下线」选项 + 保存不丢 trigger_templates
+    panel._render_form({"name": "t", "display_name": "t",
+                        "task_type": "special", "enabled": True,
+                        "repeat": {"type": "trigger",
+                                   "trigger_templates": ["scene/主界面"]}})
+    cb2 = panel._form_widgets["repeat_type"]
+    check("旧 trigger 配置回显已下线选项",
+          cb2.currentData() == "trigger", str(cb2.currentData()))
+    check("触发信号控件已移除", "trigger_templates" not in panel._form_widgets)
+    config = panel._collect_config()
+    check("保存保留旧 trigger_templates",
+          config["repeat"]["type"] == "trigger"
+          and config["repeat"]["trigger_templates"] == ["scene/主界面"],
+          str(config["repeat"]))
 
     shutil.rmtree(tmp, ignore_errors=True)
 

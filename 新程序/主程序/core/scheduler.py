@@ -162,6 +162,10 @@ class Scheduler:
         # 到期日志去重（build_schedule 结果变化时才打印，避免刷屏）
         self._last_due_names: tuple[str, ...] | None = None
 
+        # ── 信号体系（2026-08-16）──
+        self._trigger_checker = None   # fn(name)->bool：图内含任务信号触发器
+        self._anomaly_checker = None   # fn(name)->bool：任务被标记异常（不进队列）
+
         # 配置变更 → 热重载任务（保存后立即生效）
         self._bus.subscribe(Events.CONFIG_CHANGED, self._on_config_changed)
         # 触发式任务：02-TriggerWatcher 识别命中触发模板 → 置为到期（§3.1 trigger 例外）
@@ -588,6 +592,41 @@ class Scheduler:
 
         self._store.save(data)
 
+    # ── 游戏切换（2026-08-16 B方案）───────────────────────
+
+    def switch_state_store(self, store) -> None:
+        """切换到新游戏的持久化状态存储（games/{game}/runtime/task_state.json）。
+
+        流程：保存旧游戏状态 → 换 store → 清空内存调度状态 →
+        load_tasks_from_config（此时 ConfigManager 已切到新游戏 tasks.yaml）
+        → load_state 恢复新游戏的执行记录。
+        """
+        try:
+            self.save_state()
+        except Exception:
+            pass
+        with self._lock:
+            self._store = store
+            self._tasks.clear()
+            self._next_run.clear()
+            self._today_count.clear()
+            self._total_count.clear()
+            self._defer_reasons.clear()
+            self.task_status.clear()
+            self.schedule_queue = []
+            self._last_due_names = None
+        self.load_tasks_from_config()
+        try:
+            self.load_state()
+        except Exception:
+            pass
+        # 通知 UI 刷新（队列/状态全量变化）
+        try:
+            self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
+                              tasks=[t.name for t in self._tasks.values()])
+        except Exception:
+            pass
+
     # ── 调度查询（§5.3 + §3.2）───────────────────────────────
 
     def build_schedule(self, publish: bool = True) -> list[TaskInfo]:
@@ -621,6 +660,22 @@ class Scheduler:
                 task_status = self.task_status.get(name)
                 if task_status == ScheduleStatus.SKIPPED:
                     continue
+
+                # ── 信号体系（2026-08-16）──
+                # 异常任务：不进任何队列，直到确认修复
+                if self._anomaly_checker is not None:
+                    try:
+                        if self._anomaly_checker(name):
+                            continue
+                    except Exception:
+                        pass
+                # 触发任务：到期进待触发区（get_pending_trigger_tasks），不进待执行
+                if self._trigger_checker is not None:
+                    try:
+                        if self._trigger_checker(name):
+                            continue
+                    except Exception:
+                        pass
                 if task_status == ScheduleStatus.COMPLETED and name not in self._next_run:
                     continue
 
@@ -669,6 +724,97 @@ class Scheduler:
 
         self.schedule_queue = result
         return result
+
+    # ── 信号体系（2026-08-16）───────────────────────────────
+
+    def set_trigger_checker(self, fn) -> None:
+        """注入触发任务判定（图内是否含任务信号触发器，RunController 注册）。"""
+        self._trigger_checker = fn
+
+    def set_anomaly_checker(self, fn) -> None:
+        """注入异常任务判定（AnomalyStore，RunController 注册）。"""
+        self._anomaly_checker = fn
+
+    def get_pending_trigger_tasks(self) -> list[TaskInfo]:
+        """待触发任务列表（触发任务已到期且未达次数上限，UI「待触发」区）。"""
+        if self._trigger_checker is None:
+            return []
+        now = datetime.now(self._timezone)
+        out: list[TaskInfo] = []
+        for name, config in self._tasks.items():
+            if not config.enabled:
+                continue
+            try:
+                if not self._trigger_checker(name):
+                    continue
+            except Exception:
+                continue
+            if self._anomaly_checker is not None:
+                try:
+                    if self._anomaly_checker(name):
+                        continue
+                except Exception:
+                    pass
+            task_status = self.task_status.get(name)
+            if task_status == ScheduleStatus.SKIPPED:
+                continue
+            if task_status == ScheduleStatus.COMPLETED and name not in self._next_run:
+                continue
+            if not self.is_due(name, now):
+                continue
+            if not self._check_times_limit(name):
+                continue
+            out.append(TaskInfo(
+                name=name,
+                priority=config.priority,
+                category=config.category,
+                next_run=self._next_run.get(name),
+                status=ScheduleStatus.DUE,
+            ))
+        out.sort(key=lambda t: (t.priority, t.name))
+        return out
+
+    def get_priority(self, task_name: str) -> int:
+        cfg = self._tasks.get(task_name)
+        return int(getattr(cfg, 'priority', 10) or 10) if cfg else 10
+
+    def enqueue_pending(self, task_name: str) -> None:
+        """加入待执行队列：下次执行时间 = 当前时刻（效果等同到期）。"""
+        with self._lock:
+            self._next_run[task_name] = datetime.now(self._timezone)
+            self.task_status[task_name] = ScheduleStatus.WAITING
+        try:
+            self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
+                              queue=[task_name])
+        except Exception:
+            pass
+
+    def skip_cycle(self, task_name: str) -> None:
+        """跳过周期：下次执行时间 = 下个周期开始，进未开始队列（不进失效）。"""
+        cfg = self._tasks.get(task_name)
+        if cfg is None:
+            return
+        with self._lock:
+            nrt = self._calc_initial_next_run(cfg)
+            if nrt is not None:
+                self._next_run[task_name] = nrt
+            self.task_status[task_name] = ScheduleStatus.WAITING
+        try:
+            self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
+                              queue=[task_name])
+        except Exception:
+            pass
+
+    def invalidate(self, task_name: str) -> None:
+        """任务失效：不再触发/执行，归入已失效。"""
+        with self._lock:
+            self._next_run.pop(task_name, None)
+            self.task_status[task_name] = ScheduleStatus.COMPLETED
+        try:
+            self._bus.publish(Events.SCHEDULE_UPDATED, source="scheduler",
+                              queue=[task_name])
+        except Exception:
+            pass
 
     def get_due_tasks(self) -> list[dict[str, Any]]:
         """

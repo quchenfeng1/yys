@@ -44,12 +44,27 @@ class TeachEngine:
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._step_event = threading.Event()   # 单步模式：每节点前等待"下一步"
         self._worker: threading.Thread | None = None
         self._running = False
+        self._step_mode = False               # True=单步调试模式
         self._task_name = ""
         self._task: dict = {}
+        self._run_params: dict = {}   # 本次运行的外部参数覆盖值（变量配置页）
         self._pending: dict | None = None   # {"event","screenshot_path","info"}
         self._unknown_count = 0
+
+    # ── 游戏切换（2026-08-16 B方案）───────────────────────
+
+    def switch_game(self, store=None, assets_dir: str | None = None,
+                    scene_store=None) -> None:
+        """切换到新游戏的可视化体系（调用方保证示教未运行）。"""
+        if store is not None:
+            self._store = store
+        if assets_dir is not None:
+            self._assets_dir = Path(assets_dir)
+        if scene_store is not None:
+            self._scene_store = scene_store
 
         # 订阅用户指示（UI → 示教引擎）
         self._bus.subscribe(Events.VISUAL_ACTION_RECEIVED, self._on_action_received)
@@ -64,8 +79,15 @@ class TeachEngine:
     def current_task(self) -> str:
         return self._task_name
 
-    def teach_run(self, task_name: str) -> bool:
-        """示教运行指定可视化任务（后台线程）"""
+    def teach_run(self, task_name: str, step_mode: bool = False,
+                  params: dict | None = None) -> bool:
+        """示教运行指定可视化任务（后台线程）。
+
+        step_mode=True → 单步调试：每个节点执行前暂停，
+        点「⏭ 下一步」调 next_step() 放行一步（节点红框高亮）。
+        params → 本次运行的外部参数覆盖值（变量组键→值；
+        未提供的键回退任务 param_values / 默认值）。
+        """
         if self._running:
             return False
         if self._store is None:
@@ -75,19 +97,46 @@ class TeachEngine:
         except Exception:
             return False
         self._task_name = task_name
+        self._run_params = dict(params or {})
         self._running = True
+        self._step_mode = bool(step_mode)
         self._stop_event.clear()
+        self._step_event.clear()
         self._unknown_count = 0
         self._worker = threading.Thread(target=self._worker_run,
                                         daemon=True,
                                         name=f"teach-{task_name}")
         self._worker.start()
-        self._log(f"示教运行开始: {task_name}")
+        self._log(f"示教运行开始: {task_name}"
+                  f"{'（单步调试）' if self._step_mode else ''}")
         return True
+
+    @property
+    def step_mode(self) -> bool:
+        """当前是否处于单步调试模式（供 UI 下一步按钮状态）"""
+        return self._running and self._step_mode
+
+    def next_step(self) -> None:
+        """单步模式：放行一步（执行当前红框高亮节点并停到下一节点）"""
+        self._step_event.set()
+
+    def _publish_image(self, nid: str, data) -> None:
+        """截图器帧发布（带诊断日志）"""
+        self._log(f"[预览] 截图器帧发布: {nid} ({len(data)} bytes)")
+        self._bus.publish(Events.VISUAL_IMAGE_PREVIEW, node_id=nid, data=data)
+
+    def _on_node(self, nid: str) -> None:
+        """节点执行前：发布高亮事件；单步模式等待下一步指令"""
+        self._bus.publish(Events.VISUAL_NODE_EXEC, node_id=nid)
+        if self._step_mode:
+            self._log(f"[单步] 停在节点 {nid}，点「下一步」执行")
+            self._step_event.wait()
+            self._step_event.clear()
 
     def stop(self) -> None:
         """停止示教运行"""
         self._stop_event.set()
+        self._step_event.set()   # 解除单步等待
         with self._lock:
             if self._pending:
                 # 解除阻断等待
@@ -119,8 +168,16 @@ class TeachEngine:
                 task=self._task,
                 assets_dir=self._assets_dir,
                 stop_event=self._stop_event,
-                on_unknown=self._on_unknown,
+                # 外部参数：常量值 + 任务保存值 + 本次运行覆盖（含类型转换）
+                param_values=vs.effective_param_values(self._task,
+                                                       self._run_params),
+                # 当前执行节点 → 事件总线 → 画布红框高亮；单步模式在此等待
+                on_node=self._on_node,
+                # 截图器帧 → 截图器节点上直接预览（仅测试运行）
+                publish_image=self._publish_image,
                 scene_loader=(self._scene_store.load
+                              if self._scene_store is not None else None),
+                scene_lister=(self._scene_store.list
                               if self._scene_store is not None else None),
                 dry_run=False,
             )
@@ -137,6 +194,10 @@ class TeachEngine:
             self._log(f"示教运行异常: {e}", level="error")
         finally:
             self._running = False
+            self._step_mode = False
+            self._step_event.set()   # 防止 UI 侧仍在等待
+            # 清除画布节点高亮
+            self._bus.publish(Events.VISUAL_NODE_EXEC, node_id="")
             self._bus.publish(Events.VISUAL_TEACH_PROGRESS,
                               task=self._task_name, phase="finished")
 
@@ -148,7 +209,8 @@ class TeachEngine:
             assets_dir = self._store.task_assets_dir(self._task_name) if self._store else Path(".")
             ts = int(time.time() * 1000)
             path = assets_dir / f"unknown_{ts}.png"
-            cv2.imwrite(str(path), screen)
+            from core.cv_io import imwrite as _cv_imwrite
+            _cv_imwrite(str(path), screen)
         except Exception:
             path = Path("")
 
@@ -192,8 +254,14 @@ class TeachEngine:
                 if self._scene_store is not None:
                     try:
                         self._scene_store.save(scene)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._log(f"场景入库失败（任务副本已保存）: {e}")
+                # 任务素材库（下拉源）
+                mats = self._task.setdefault("materials", {})
+                scenes = mats.setdefault("scenes", [])
+                sid = scene.get("id", "")
+                if sid and sid not in scenes:
+                    scenes.append(sid)
                 # 回填：若是「未设置的识图节点」触发的示教，把场景 id 写回该节点
                 info = pending.get("info") or {}
                 if info.get("type") == "scene_new" and info.get("node"):
@@ -203,13 +271,21 @@ class TeachEngine:
                 vs.add_point(self._task, kw["point"])
                 self._log(f"已记录点击点: {kw['point'].get('label', kw['point'].get('id'))}")
             elif action == "add_element" and kw.get("template"):
-                # 识图器示教：回填模板路径 + 搜索区域到目标节点
+                # 点击器示教：回填图标素材路径到目标节点
                 info = pending.get("info") or {}
                 if info.get("type") == "element_new" and info.get("node"):
                     self._fill_node_element(info["node"],
                                             kw.get("template", ""),
                                             kw.get("region", ""))
                 self._log(f"已记录识图元素: {kw.get('template')}")
+            elif action == "add_ocr_element" and kw.get("template"):
+                # OCR识别素材：加入任务素材库（OCR读取下拉）
+                mats = self._task.setdefault("materials", {})
+                ocr_list = mats.setdefault("ocr", [])
+                rel = kw.get("template", "")
+                if rel and rel not in ocr_list:
+                    ocr_list.append(rel)
+                self._log(f"已记录OCR识别素材: {rel}")
             elif action == "add_ocr_region" and kw.get("region"):
                 vs.add_ocr_region(self._task, kw["region"])
                 self._log(f"已记录OCR区域: {kw['region'].get('label', kw['region'].get('id'))}")
